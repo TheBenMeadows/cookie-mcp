@@ -498,8 +498,8 @@ registerTool(
       "usually costs only account rent) plus any devBuyCook. " +
       "A LOGO IS REQUIRED: pass `imagePath` (preferred for a file on this machine — the server reads " +
       "and types it itself, so never base64 a local file yourself), `imageBase64` with " +
-      "`imageMimeType` (for an image you generated), or `imageUrl`, and the launchpad pins it to " +
-      "IPFS. Launching without one is " +
+      "`imageMimeType` (for an image you generated), or `imageUrl` (downloaded and re-pinned, so the " +
+      "logo outlives its original host). The bytes are pinned to IPFS either way. Launching without one is " +
       "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
       "be added later. The mint address is chosen by the launchpad (the program requires one ending " +
       "in `momo`). Set `devBuyCook` to make your own buy the atomic first trade. Requires " +
@@ -519,7 +519,10 @@ registerTool(
       imageUrl: z
         .string()
         .optional()
-        .describe("alternative to imageBase64: an already-hosted https image URL"),
+        .describe(
+          "an already-hosted https image URL — its bytes are downloaded and re-pinned to IPFS, so " +
+            "the logo survives the original host going away",
+        ),
       imagePath: z
         .string()
         .optional()
