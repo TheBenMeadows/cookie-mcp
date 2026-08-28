@@ -52,7 +52,14 @@ import {
   type LaunchpadPosition,
   type PoolStatus,
 } from "./api";
-import { estimateBuy, estimateSell, graduationProgressPct, spotPriceCook } from "./curve";
+import {
+  estimateBuy,
+  estimateSell,
+  graduationProgressPct,
+  paymentForTokens,
+  spotPriceCook,
+  type CurveState,
+} from "./curve";
 import { poolFeeShareBps, poolTradeFeeBps } from "./fees";
 import {
   decodeTokenAmount,
@@ -943,8 +950,94 @@ export interface DeployTokenArgs {
   minBuyCook?: string | number;
   maxBuyPerWalletCook?: string | number;
   devBuyCook?: string | number;
+  /**
+   * Dev buy expressed as a percentage of the TOTAL supply, converted to COOK off the live launch
+   * curve. Mutually exclusive with `devBuyCook`.
+   */
+  devBuyPctOfTotalSupply?: number;
   /** Deliberately launch with no logo. Required to bypass `assertLogoDecision`. */
   noLogo?: boolean;
+}
+
+/**
+ * The curve every pool opens on — `create_pool` snapshots these off the config verbatim, so a launch
+ * can be quoted before the pool exists. `null` on a deploy that does not publish the reserves: never
+ * fall back to hardcoded constants, which is the staleness trap that the graduation-target minimum
+ * already walked into once.
+ */
+export function launchCurve(cfg: LaunchpadConfig): CurveState | null {
+  const x = cfg.defaultVirtualPaymentReserve;
+  const y = cfg.defaultVirtualTokenReserve;
+  if (!x || !y || BigInt(x) <= 0n || BigInt(y) <= 0n) return null;
+  return {
+    virtualPaymentReserve: x,
+    virtualTokenReserve: y,
+    tokensSold: "0",
+    paymentRaisedNet: "0",
+  };
+}
+
+/**
+ * COOK needed to buy `pct` % of the TOTAL supply on a fresh curve (pure).
+ *
+ * "prebuy 1%" is ambiguous in the wild — the create page quotes a dev buy as a share of the *sale*
+ * supply (800M of the 1B minted), so the same words mean two amounts ~338 COOK apart. The parameter
+ * name commits to one denominator and `describeDevBuy` reports both, rather than leaving the user to
+ * discover which one they got after the launch is irreversible.
+ */
+export function devBuyCookForSupplyPct(cfg: LaunchpadConfig, pct: number): bigint {
+  if (!Number.isFinite(pct) || pct <= 0) {
+    throw new CookieMcpError(
+      "devBuyPctOfTotalSupply must be greater than 0",
+      "e.g. 1 for 1% of the total supply",
+    );
+  }
+  const total = BigInt(cfg.defaultTotalSupply);
+  const sale = BigInt(cfg.defaultSaleSupply);
+  // Percent in basis points keeps the share exact for the fractions anyone actually asks for.
+  const tokens = (total * BigInt(Math.round(pct * 100))) / 10_000n;
+  if (tokens <= 0n) {
+    throw new CookieMcpError(
+      `${pct}% of the supply rounds to zero tokens`,
+      "ask for a larger share",
+    );
+  }
+  if (tokens > sale) {
+    throw new CookieMcpError(
+      `${pct}% of the total supply is more than the whole sale supply`,
+      `only ${rawToUi(sale, cfg.defaultTokenDecimals)} of ${rawToUi(total, cfg.defaultTokenDecimals)} tokens are sold on the curve`,
+    );
+  }
+  const curve = launchCurve(cfg);
+  if (!curve) {
+    throw new CookieMcpError(
+      "this launchpad does not publish its launch curve, so a supply share cannot be priced",
+      "pass devBuyCook with an explicit COOK amount instead",
+    );
+  }
+  return paymentForTokens(curve, tokens, cfg.tradeFeeBps);
+}
+
+/** What a dev buy actually gets, stated against BOTH denominators (pure). */
+export function describeDevBuy(cfg: LaunchpadConfig, devBuyRaw: bigint): string | null {
+  if (devBuyRaw <= 0n) return null;
+  const curve = launchCurve(cfg);
+  if (!curve) return null; // a curve the config did not publish — say nothing rather than guess.
+  let tokens: bigint;
+  try {
+    tokens = estimateBuy(curve, devBuyRaw, cfg.tradeFeeBps).tokensOutRaw;
+  } catch {
+    return null;
+  }
+  const pct = (of: string) => {
+    const d = BigInt(of);
+    return d > 0n ? `${((Number(tokens) / Number(d)) * 100).toFixed(3)}%` : "?";
+  };
+  return (
+    `The dev buy of ${rawToUi(devBuyRaw, COOK_DECIMALS)} ${COOK_SYMBOL} bought about ` +
+    `${rawToUi(tokens, cfg.defaultTokenDecimals)} tokens — ${pct(cfg.defaultTotalSupply)} of the ` +
+    `total supply, ${pct(cfg.defaultSaleSupply)} of the sale supply.`
+  );
 }
 
 /**
@@ -1114,6 +1207,12 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
         "one already hosted",
     );
   }
+  if (args.devBuyCook != null && args.devBuyPctOfTotalSupply != null) {
+    throw new CookieMcpError(
+      "pass either devBuyCook or devBuyPctOfTotalSupply, not both",
+      "devBuyPctOfTotalSupply prices the share off the live launch curve for you",
+    );
+  }
   if (args.imageBase64 && !args.imageMimeType) {
     throw new CookieMcpError(
       "imageMimeType is required with imageBase64",
@@ -1138,7 +1237,12 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   }
 
   const params = buildCreateParams(args);
-  const devBuyRaw = args.devBuyCook != null ? uiToRaw(args.devBuyCook, COOK_DECIMALS) : 0n;
+  const devBuyRaw =
+    args.devBuyPctOfTotalSupply != null
+      ? devBuyCookForSupplyPct(cfg, args.devBuyPctOfTotalSupply)
+      : args.devBuyCook != null
+        ? uiToRaw(args.devBuyCook, COOK_DECIMALS)
+        : 0n;
 
   // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
   let imageUrl: string | undefined;
@@ -1189,6 +1293,10 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   ];
   if (devBuyRaw > 0n) {
     notes.push("The dev buy was bundled into the same transaction, so it is the first trade.");
+    // Always state both denominators: "1% of supply" means two different amounts depending on
+    // whether it is read against the minted supply or the 80% actually sold on the curve.
+    const share = describeDevBuy(cfg, devBuyRaw);
+    if (share) notes.push(share);
   }
 
   return {

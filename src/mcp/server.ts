@@ -502,7 +502,8 @@ registerTool(
       "logo outlives its original host). The bytes are pinned to IPFS either way. Launching without one is " +
       "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
       "be added later. The mint address is chosen by the launchpad (the program requires one ending " +
-      "in `momo`). Set `devBuyCook` to make your own buy the atomic first trade. Requires " +
+      "in `momo`). Set `devBuyCook` (or `devBuyPctOfTotalSupply` for a share of the supply) to make " +
+      "your own buy the atomic first trade. Requires " +
       "COOKIE_PRIVATE_KEY.",
     inputSchema: {
       name: z.string().min(1).max(32).describe("token name, max 32 chars"),
@@ -564,6 +565,16 @@ registerTool(
         .union([z.number().positive(), z.string()])
         .optional()
         .describe("optional COOK amount to buy atomically in the launch transaction"),
+      devBuyPctOfTotalSupply: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "dev buy sized as a percent of the TOTAL supply (e.g. 1 for 1%), priced off the live " +
+            "launch curve. Use this when the user asks for a share rather than a COOK amount — " +
+            "note the launchpad UI quotes a dev buy against the SALE supply (80% of total), so the " +
+            "same percent means two different amounts. Mutually exclusive with devBuyCook",
+        ),
       noLogo: z
         .boolean()
         .optional()
@@ -591,6 +602,7 @@ registerTool(
       minBuyCook?: string | number;
       maxBuyPerWalletCook?: string | number;
       devBuyCook?: string | number;
+      devBuyPctOfTotalSupply?: number;
       noLogo?: boolean;
     }) => deployToken(a),
   ),

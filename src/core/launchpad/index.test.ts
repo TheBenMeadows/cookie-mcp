@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 
 import {
   assertLogoDecision,
+  describeDevBuy,
+  devBuyCookForSupplyPct,
   buildCreateParams,
   buildMetadata,
   creatorVestOutstanding,
@@ -605,5 +607,48 @@ describe("resolveReferrer", () => {
   // so it is passed through and the API validates it.)
   it("ignores a malformed default rather than failing the buy", () => {
     expect(resolveReferrer(undefined, BUYER, "not-a-pubkey")).toBeNull();
+  });
+});
+
+describe("devBuyCookForSupplyPct / describeDevBuy", () => {
+  // The live config: 1B total, 800M sale, vpr 176,471 COOK, vtr 1.073B, 1% fee.
+  const cfg = {
+    defaultTotalSupply: "1000000000000000",
+    defaultSaleSupply: "800000000000000",
+    defaultVirtualPaymentReserve: "176471000000000",
+    defaultVirtualTokenReserve: "1073000000000000",
+    defaultTokenDecimals: 6,
+    tradeFeeBps: 100,
+  } as unknown as Parameters<typeof devBuyCookForSupplyPct>[0];
+
+  it("prices 1% of the total supply off the live curve", () => {
+    expect(devBuyCookForSupplyPct(cfg, 1)).toBe(1_676_891_207_465n);
+  });
+
+  it("scales to fractional shares", () => {
+    expect(devBuyCookForSupplyPct(cfg, 0.5)).toBeLessThan(devBuyCookForSupplyPct(cfg, 1));
+    expect(devBuyCookForSupplyPct(cfg, 2)).toBeGreaterThan(devBuyCookForSupplyPct(cfg, 1));
+  });
+
+  it("refuses a share of zero or one bigger than the whole sale supply", () => {
+    expect(() => devBuyCookForSupplyPct(cfg, 0)).toThrow(/greater than 0/);
+    expect(() => devBuyCookForSupplyPct(cfg, 90)).toThrow(/whole sale supply/);
+  });
+
+  it("refuses to guess when the deploy does not publish the curve", () => {
+    const old = { ...cfg, defaultVirtualPaymentReserve: undefined } as typeof cfg;
+    expect(() => devBuyCookForSupplyPct(old, 1)).toThrow(/does not publish its launch curve/);
+    // ...and the report simply says nothing rather than inventing a share.
+    expect(describeDevBuy(old, 1_000_000_000n)).toBeNull();
+  });
+
+  it("reports a dev buy against BOTH denominators — the ambiguity that started this", () => {
+    const note = describeDevBuy(cfg, 1_676_891_207_465n);
+    expect(note).toContain("1.000% of the total supply");
+    expect(note).toContain("1.250% of the sale supply");
+  });
+
+  it("says nothing when there was no dev buy", () => {
+    expect(describeDevBuy(cfg, 0n)).toBeNull();
   });
 });

@@ -38,6 +38,12 @@ export interface LaunchpadConfig {
   defaultTokenDecimals: number;
   defaultTotalSupply: string;
   defaultSaleSupply: string;
+  /**
+   * The curve every pool opens on. Only published by newer backend deploys, so both are optional and
+   * every consumer must degrade rather than guess constants (see `launchCurve`).
+   */
+  defaultVirtualPaymentReserve?: string;
+  defaultVirtualTokenReserve?: string;
   paused: boolean;
   /** How many pre-ground `momo` mints the API has in reserve (0 → launches are unavailable). */
   momoReady?: number;

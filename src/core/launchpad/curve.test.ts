@@ -6,6 +6,7 @@ import {
   estimateSell,
   feeOf,
   graduationProgressPct,
+  paymentForTokens,
   quoteBuy,
   quoteSell,
   reserves,
@@ -146,5 +147,44 @@ describe("graduationProgressPct", () => {
   it("clamps over-target raises to 100 and handles a zero target", () => {
     expect(graduationProgressPct("500031603805152", "500000000000000")).toBe(100);
     expect(graduationProgressPct("1", "0")).toBe(0);
+  });
+});
+
+describe("paymentForTokens", () => {
+  // The live launch curve: vpr 176,471 COOK (9dp), vtr 1.073B tokens (6dp), 1% fee.
+  const fresh = {
+    virtualPaymentReserve: "176471000000000",
+    virtualTokenReserve: "1073000000000000",
+    tokensSold: "0",
+    paymentRaisedNet: "0",
+  };
+  const FEE_BPS = 100;
+
+  it("is the exact inverse of estimateBuy, and minimal", () => {
+    for (const tokens of [1_000_000n, 8_000_000_000_000n, 10_000_000_000_000n]) {
+      const gross = paymentForTokens(fresh, tokens, FEE_BPS);
+      expect(estimateBuy(fresh, gross, FEE_BPS).tokensOutRaw).toBeGreaterThanOrEqual(tokens);
+      // One base unit less must undershoot, or it is not the smallest sufficient payment.
+      expect(estimateBuy(fresh, gross - 1n, FEE_BPS).tokensOutRaw).toBeLessThan(tokens);
+    }
+  });
+
+  it("prices 1% of the 1B total supply at 1,676.891207465 COOK", () => {
+    // 10M tokens at 6dp — the number the COWDOG launch needed. Derived by hand it came out 1,677,
+    // which overbuys by 642 tokens: close enough to look right, which is why it should not be manual.
+    expect(paymentForTokens(fresh, 10_000_000_000_000n, FEE_BPS)).toBe(1_676_891_207_465n);
+  });
+
+  it("prices 1% of the 800M sale supply lower — the two denominators are 338 COOK apart", () => {
+    const ofSale = paymentForTokens(fresh, 8_000_000_000_000n, FEE_BPS);
+    expect(ofSale).toBe(1_338_993_692_796n);
+    expect(ofSale).toBeLessThan(paymentForTokens(fresh, 10_000_000_000_000n, FEE_BPS));
+  });
+
+  it("refuses a non-positive amount and more tokens than the curve holds", () => {
+    expect(() => paymentForTokens(fresh, 0n, FEE_BPS)).toThrow(/must be positive/);
+    expect(() => paymentForTokens(fresh, 1_073_000_000_000_000n, FEE_BPS)).toThrow(
+      /cannot sell that many/,
+    );
   });
 });

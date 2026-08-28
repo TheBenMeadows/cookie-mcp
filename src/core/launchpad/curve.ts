@@ -88,6 +88,42 @@ export function estimateBuy(
   return { feeRaw, netRaw, tokensOutRaw: quoteBuy(pool, netRaw) };
 }
 
+/**
+ * The payment that buys AT LEAST `tokensRaw` tokens — the inverse of `estimateBuy`, and the smallest
+ * such amount.
+ *
+ * Exists because a launch is expressed in supply ("prebuy 1%") while the tool takes COOK, and doing
+ * that conversion by hand invites the wrong denominator or a float that lands a hair short. Derived
+ * from `quoteBuy` rather than approximated: out = y − ceil(k / (x + net)) ≥ T holds exactly when
+ * net ≥ ceil(k / (y − T)) − x, since `ceil(v) ≤ m` and `v ≤ m` agree for integer m.
+ */
+export function paymentForTokens(pool: CurveState, tokensRaw: bigint, tradeFeeBps: number): bigint {
+  const { x, y } = reserves(pool);
+  if (tokensRaw <= 0n) {
+    throw new CookieMcpError("the token amount must be positive", "ask for a non-zero share");
+  }
+  if (tokensRaw >= y) {
+    throw new CookieMcpError(
+      "the curve cannot sell that many tokens — it holds fewer than you asked for",
+      "ask for a smaller share of the supply",
+    );
+  }
+  const k = x * y;
+  const netRaw = ceilDiv(k, y - tokensRaw) - x;
+  const net = netRaw > 0n ? netRaw : 1n;
+
+  // Invert the fee: net(gross) = gross − floor(gross·bps/10000), monotone but with flat steps where
+  // the flooring hands the buyer a sub-unit. `ceil(net / (1 − fee))` lands near the answer but on
+  // either side of it, so settle onto the true minimum from both directions — each loop runs a
+  // handful of times, bounded by the fee's granularity.
+  const bps = BigInt(Math.round(tradeFeeBps));
+  const netOf = (g: bigint): bigint => g - feeOf(g, tradeFeeBps);
+  let gross = ceilDiv(net * BPS_DENOMINATOR, BPS_DENOMINATOR - bps);
+  while (netOf(gross) < net) gross += 1n;
+  while (gross > 1n && netOf(gross - 1n) >= net) gross -= 1n;
+  return gross;
+}
+
 export interface SellEstimate {
   /** Payment the curve gives up (before the fee). */
   grossRaw: bigint;
