@@ -123,9 +123,10 @@ describe("assertLogoDecision", () => {
   // logo" on the RESULT, i.e. after mint + freeze authority were renounced and the metadata was frozen.
   // Both live validation launches on 2026-07-29 shipped logo-less despite an "ALWAYS give the token a
   // logo" line in the tool description, which is what proved prose insufficient.
-  it("accepts either image source", () => {
+  it("accepts any of the three image sources", () => {
     expect(() => assertLogoDecision({ imageBase64: "iVBORw0KGgo=" })).not.toThrow();
     expect(() => assertLogoDecision({ imageUrl: "https://example.com/logo.png" })).not.toThrow();
+    expect(() => assertLogoDecision({ imagePath: "~/logo.png" })).not.toThrow();
   });
 
   it("refuses a logo-less launch and names the escape hatch", () => {
@@ -143,6 +144,7 @@ describe("assertLogoDecision", () => {
   it("treats blank/whitespace image fields as absent, not as a logo", () => {
     expect(() => assertLogoDecision({ imageUrl: "   " })).toThrow(CookieMcpError);
     expect(() => assertLogoDecision({ imageBase64: "" })).toThrow(CookieMcpError);
+    expect(() => assertLogoDecision({ imagePath: "  " })).toThrow(CookieMcpError);
   });
 
   it("lets an explicit opt-out through", () => {

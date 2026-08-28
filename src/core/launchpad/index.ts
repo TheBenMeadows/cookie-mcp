@@ -24,6 +24,7 @@ import { confirmSent } from "../confirm";
 import { resolveWallet } from "../domains";
 import { CookieMcpError } from "../errors";
 import { rawToUi, uiToRaw } from "../format";
+import { readImageFile } from "../imageFile";
 import { getConnection } from "../rpc";
 import { ownPublicKey, requireWallet } from "../wallet";
 import {
@@ -930,6 +931,8 @@ export interface DeployTokenArgs {
   imageBase64?: string;
   imageMimeType?: string;
   imageUrl?: string;
+  /** Path to a logo on this machine — read and typed here, never routed through the model. */
+  imagePath?: string;
   website?: string;
   twitter?: string;
   telegram?: string;
@@ -952,12 +955,15 @@ export interface DeployTokenArgs {
  * later, so the check has to happen while the launch can still be stopped. Opting out is one flag.
  */
 export function assertLogoDecision(
-  args: Pick<DeployTokenArgs, "imageBase64" | "imageUrl" | "noLogo">,
+  args: Pick<DeployTokenArgs, "imageBase64" | "imageUrl" | "imagePath" | "noLogo">,
 ): void {
-  if (args.imageBase64?.trim() || args.imageUrl?.trim() || args.noLogo) return;
+  if (args.imageBase64?.trim() || args.imageUrl?.trim() || args.imagePath?.trim() || args.noLogo) {
+    return;
+  }
   throw new CookieMcpError(
     "this launch has no logo, and a launch is irreversible",
-    "pass imageBase64 (preferred — attach an image you generated, with imageMimeType) or imageUrl; " +
+    "pass imagePath (preferred for a file on this machine), imageBase64 (for an image you " +
+      "generated, with imageMimeType), or imageUrl; " +
       "the launchpad pins it to IPFS. The metadata is immutable, so a logo can never be added later " +
       "and most launchpad UIs will show a blank image. Set noLogo: true to launch anyway.",
   );
@@ -1097,10 +1103,14 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   const { keypair } = requireWallet();
   const creator = keypair.publicKey.toBase58();
 
-  if (args.imageBase64 && args.imageUrl) {
+  const sources = (["imagePath", "imageBase64", "imageUrl"] as const).filter((k) =>
+    args[k]?.trim(),
+  );
+  if (sources.length > 1) {
     throw new CookieMcpError(
-      "pass either imageBase64 or imageUrl, not both",
-      "imageBase64 is preferred when you generated the image yourself",
+      `pass one logo source, not ${sources.length} (${sources.join(", ")})`,
+      "imagePath for a file on this machine, imageBase64 for an image you generated, imageUrl for " +
+        "one already hosted",
     );
   }
   if (args.imageBase64 && !args.imageMimeType) {
@@ -1131,7 +1141,12 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
 
   // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
   let imageUrl = args.imageUrl?.trim() || undefined;
-  if (args.imageBase64) {
+  if (args.imagePath) {
+    // Read from disk here, not in the tool layer: a bad path must fail before the session and the
+    // config call, alongside every other free failure.
+    const file = readImageFile(args.imagePath);
+    imageUrl = await uploadImage(file.base64, file.mimeType);
+  } else if (args.imageBase64) {
     imageUrl = await uploadImage(args.imageBase64, args.imageMimeType!);
   }
   const metadata = buildMetadata(args, imageUrl);

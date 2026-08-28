@@ -496,8 +496,10 @@ registerTool(
       "immutable, so a launch is FINAL — nothing about the token can be changed afterwards. Costs the " +
       "launchpad's creation fee, read live from its config (0 on the current deployment, so a launch " +
       "usually costs only account rent) plus any devBuyCook. " +
-      "A LOGO IS REQUIRED: pass `imageBase64` (preferred — attach an image you generated, with " +
-      "`imageMimeType`) or `imageUrl` and the launchpad pins it to IPFS. Launching without one is " +
+      "A LOGO IS REQUIRED: pass `imagePath` (preferred for a file on this machine — the server reads " +
+      "and types it itself, so never base64 a local file yourself), `imageBase64` with " +
+      "`imageMimeType` (for an image you generated), or `imageUrl`, and the launchpad pins it to " +
+      "IPFS. Launching without one is " +
       "refused unless you set `noLogo: true`, because the metadata is immutable and a logo can never " +
       "be added later. The mint address is chosen by the launchpad (the program requires one ending " +
       "in `momo`). Set `devBuyCook` to make your own buy the atomic first trade. Requires " +
@@ -518,6 +520,14 @@ registerTool(
         .string()
         .optional()
         .describe("alternative to imageBase64: an already-hosted https image URL"),
+      imagePath: z
+        .string()
+        .optional()
+        .describe(
+          "path to a logo file on this machine (PNG/JPEG/GIF/WebP, max 5 MB, `~` ok) — preferred " +
+            "over imageBase64 for a local file: the server reads the bytes and detects the type, " +
+            "so the image never has to be base64'd through the conversation",
+        ),
       website: z.string().optional().describe("project website URL"),
       twitter: z.string().optional().describe("X/Twitter handle or URL"),
       telegram: z.string().optional().describe("Telegram handle or URL"),
@@ -568,6 +578,7 @@ registerTool(
       imageBase64?: string;
       imageMimeType?: string;
       imageUrl?: string;
+      imagePath?: string;
       website?: string;
       twitter?: string;
       telegram?: string;
