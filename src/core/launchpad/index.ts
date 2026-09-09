@@ -90,6 +90,92 @@ function programErrorCode(blob: string): number | null {
  * different things in different builds (see `program.ts`).
  */
 /**
+ * Anchor's own framework errors (the 2000–3999 constraint/account range) as Anchor itself prints them.
+ *
+ * Deliberately NOT a hardcoded number → name table. `program.ts` records the lesson the hard way — an
+ * error map guessed from anything but the compiled enum mistranslates codes silently — and the
+ * framework range is exactly where that risk is worst, because we do not compile Anchor ourselves.
+ * Anchor already emits the name, the number AND the message into the logs, so read them from there and
+ * the translation cannot be wrong.
+ */
+export interface AnchorLogError {
+  /** The account the constraint was attached to, when Anchor names one (`caused by account: pool`). */
+  account?: string;
+  /** e.g. `ConstraintSeeds` */
+  code: string;
+  /** e.g. 2006 */
+  number: number;
+  /** e.g. `A seeds constraint was violated.` */
+  message?: string;
+  /** For seeds/address constraints Anchor prints the two values it compared. */
+  left?: string;
+  right?: string;
+}
+
+/** Strip the `Program log: ` / `Program data: ` framing so a log line reads as a sentence. */
+function bareLog(line: string): string {
+  return line.replace(/^Program (?:log|data): /, "").trim();
+}
+
+/**
+ * Parse an `AnchorError` out of simulation logs.
+ *
+ * Anchor prints it as one line — `AnchorError caused by account: pool. Error Code: ConstraintSeeds.
+ * Error Number: 2006. Error Message: A seeds constraint was violated.` — optionally followed by
+ * `Left:` / `Right:` lines each carrying the compared value on the NEXT line. The account-less form
+ * (`AnchorError occurred. Error Code: …`) is also emitted, hence the optional account.
+ */
+export function anchorLogError(logs: string[] | null): AnchorLogError | null {
+  if (!logs?.length) return null;
+  const lines = logs.map(bareLog);
+  const i = lines.findIndex((l) => l.startsWith("AnchorError"));
+  if (i < 0) return null;
+  const head = lines[i]!;
+  const number = Number(head.match(/Error Number: (\d+)/)?.[1]);
+  const code = head.match(/Error Code: ([A-Za-z0-9_]+)/)?.[1];
+  if (!code || !Number.isFinite(number)) return null;
+  const out: AnchorLogError = {
+    code,
+    number,
+    account: head.match(/caused by account: ([A-Za-z0-9_]+)/)?.[1],
+    message: head.match(/Error Message: (.+?)\.?$/)?.[1],
+  };
+  // `Left:` and `Right:` are labels; the value is on the line after each.
+  for (let j = i + 1; j < lines.length; j++) {
+    if (/^Left:$/.test(lines[j]!)) out.left = lines[j + 1];
+    else if (/^Right:$/.test(lines[j]!)) out.right = lines[j + 1];
+  }
+  return out;
+}
+
+/** One-line rendering of an AnchorError, including the compared values when it has them. */
+export function anchorLogSummary(e: AnchorLogError): string {
+  const parts = [`${e.code} (${e.number})`];
+  if (e.account) parts.push(`on the \`${e.account}\` account`);
+  if (e.message) parts.push(`— ${e.message}`);
+  if (e.left && e.right) parts.push(`(passed ${e.left}, program expected ${e.right})`);
+  return parts.join(" ");
+}
+
+/**
+ * Pick the lines from a failed simulation that actually say WHY, instead of blindly tailing.
+ *
+ * `logs.slice(-3)` looks reasonable and is actively misleading: for a constraint violation Anchor's
+ * last three lines are `Right:`, a bare pubkey, and `Program … failed: custom program error: 0x…`, so
+ * the `AnchorError` line naming the account and the error is cut off, and what surfaces is a pubkey
+ * that changes every build and reads as noise. That is what turned momoswap-backend#113 into a
+ * brute-force seed hunt (each rebuild leasing a rate-limited vanity mint) rather than a one-run
+ * diagnosis. So: start the window at the first line that explains something and keep going.
+ */
+export function diagnosticLogTail(logs: string[] | null, max = 6): string | undefined {
+  if (!logs?.length) return undefined;
+  const lines = logs.map(bareLog).filter((l) => l.length > 0);
+  const start = lines.findIndex((l) => /^AnchorError|panicked|^Error Code:/.test(l));
+  const window = start >= 0 ? lines.slice(start, start + max) : lines.slice(-Math.min(max, 3));
+  return window.join(" | ") || undefined;
+}
+
+/**
  * A caller-supplied reading of one program error code, for a case where the generic table's wording is
  * wrong in this specific context. Only the codes present here are overridden.
  */
@@ -113,6 +199,16 @@ export function launchpadSimError(
   if (known) {
     return new CookieMcpError(`${what} would fail: ${known}`, "nothing was sent");
   }
+  const anchor = anchorLogError(logs);
+  if (anchor) {
+    return new CookieMcpError(
+      `${what} would fail: ${anchorLogSummary(anchor)}`,
+      anchor.account
+        ? `the program rejected the \`${anchor.account}\` account it was handed — the launchpad API is ` +
+            "building against a different deployment than the one on chain; nothing was sent"
+        : "nothing was sent",
+    );
+  }
   if (/BlockhashNotFound|blockhash/i.test(blob)) {
     return new CookieMcpError(
       `${what} simulation failed: blockhash not found`,
@@ -125,7 +221,7 @@ export function launchpadSimError(
       "check the wallet's COOK balance (it also pays rent for new accounts and the network fee)",
     );
   }
-  const tail = logs?.slice(-3).join(" | ");
+  const tail = diagnosticLogTail(logs);
   return new CookieMcpError(
     `${what} simulation failed${tail ? `: ${tail}` : ""}`,
     "the pool state may have changed; re-read it and retry — nothing was sent",

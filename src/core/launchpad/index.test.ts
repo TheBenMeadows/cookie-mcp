@@ -11,6 +11,9 @@ import {
   fairRefundRaw,
   poolPhase,
   launchpadRouteMessage,
+  anchorLogError,
+  anchorLogSummary,
+  diagnosticLogTail,
   launchpadSimError,
   mapPoolView,
   positionAction,
@@ -541,12 +544,15 @@ describe("launchpadSimError", () => {
     ).toContain("insufficient funds");
   });
 
-  it("falls back to the log tail for unknown failures", () => {
+  it("falls back to the log tail for unknown failures, without the log framing", () => {
     const e = launchpadSimError("claim", { InstructionError: [0, { Custom: 9999 }] }, [
       "Program log: a",
       "Program log: b",
     ]);
-    expect(e.message).toContain("Program log: b");
+    // The tail still carries the last lines; only the repeated `Program log: ` framing is dropped, so
+    // the useful part of a long line survives the message rather than being spent on boilerplate.
+    expect(e.message).toContain("a | b");
+    expect(e.message).not.toContain("Program log:");
   });
 
   // A Fair claim on an `ended` pool needs the program to expire the pool as part of the claim. Where that
@@ -650,5 +656,113 @@ describe("devBuyCookForSupplyPct / describeDevBuy", () => {
 
   it("says nothing when there was no dev buy", () => {
     expect(describeDevBuy(cfg, 0n)).toBeNull();
+  });
+});
+
+// The real shape of a momoswap-backend#113 failure: Anchor names the account and the constraint on ONE
+// line, then prints the two compared pubkeys on lines of their own, and only then does the program's
+// own "failed" line arrive. `logs.slice(-3)` therefore ends at `Right: | <pubkey> | Program … failed`
+// and drops the only line that explains anything — the bug this suite pins.
+const SEEDS_LOGS = [
+  "Program momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw invoke [1]",
+  "Program log: Instruction: CreatePool",
+  "Program log: AnchorError caused by account: pool. Error Code: ConstraintSeeds. Error Number: 2006. Error Message: A seeds constraint was violated.",
+  "Program log: Left:",
+  "Program log: 8jMvRE7CmmTNZYRyXozkyiY7hcaEqsk3guYCewdP4sYG",
+  "Program log: Right:",
+  "Program log: GKyj2Q1v3272DfH6ceuVKNDySYfxXhZPuu7Uy7wi6HxW",
+  "Program momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw consumed 12345 of 200000 compute units",
+  "Program momoL7wu4TrXjnXMLCLzGsbx8Pm7XGgoYo7FVqDoqcw failed: custom program error: 0x7d6",
+];
+
+describe("anchorLogError", () => {
+  it("reads the account, code, number and message off the AnchorError line", () => {
+    const e = anchorLogError(SEEDS_LOGS);
+    expect(e).toMatchObject({
+      account: "pool",
+      code: "ConstraintSeeds",
+      number: 2006,
+      message: "A seeds constraint was violated",
+    });
+  });
+
+  it("pairs each Left:/Right: label with the value on the FOLLOWING line", () => {
+    const e = anchorLogError(SEEDS_LOGS);
+    expect(e?.left).toBe("8jMvRE7CmmTNZYRyXozkyiY7hcaEqsk3guYCewdP4sYG");
+    expect(e?.right).toBe("GKyj2Q1v3272DfH6ceuVKNDySYfxXhZPuu7Uy7wi6HxW");
+  });
+
+  it("handles the account-less form Anchor also emits", () => {
+    const e = anchorLogError([
+      "Program log: AnchorError occurred. Error Code: AccountNotInitialized. Error Number: 3012. Error Message: The program expected this account to be already initialized.",
+    ]);
+    expect(e).toMatchObject({ code: "AccountNotInitialized", number: 3012 });
+    expect(e?.account).toBeUndefined();
+  });
+
+  it("returns null for logs with no AnchorError, and for no logs at all", () => {
+    expect(anchorLogError(["Program log: Instruction: Buy"])).toBeNull();
+    expect(anchorLogError([])).toBeNull();
+    expect(anchorLogError(null)).toBeNull();
+  });
+
+  it("does not invent a translation when the line is malformed", () => {
+    // No Error Number → we cannot state a code, so fall through rather than half-report one.
+    expect(anchorLogError(["Program log: AnchorError caused by account: pool."])).toBeNull();
+  });
+});
+
+describe("anchorLogSummary", () => {
+  it("names the account and both compared values", () => {
+    const s = anchorLogSummary(anchorLogError(SEEDS_LOGS)!);
+    expect(s).toContain("ConstraintSeeds (2006)");
+    expect(s).toContain("`pool`");
+    expect(s).toContain("passed 8jMvRE7CmmTNZYRyXozkyiY7hcaEqsk3guYCewdP4sYG");
+    expect(s).toContain("program expected GKyj2Q1v3272DfH6ceuVKNDySYfxXhZPuu7Uy7wi6HxW");
+  });
+});
+
+describe("diagnosticLogTail", () => {
+  it("starts the window at the explanation, not 3 lines from the end", () => {
+    const tail = diagnosticLogTail(SEEDS_LOGS)!;
+    expect(tail).toContain("AnchorError caused by account: pool");
+    // The old slice(-3) behaviour began at `Right:` — assert we are no longer doing that.
+    expect(tail.startsWith("Right:")).toBe(false);
+  });
+
+  it("strips the Program log: framing", () => {
+    expect(diagnosticLogTail(SEEDS_LOGS)).not.toContain("Program log:");
+  });
+
+  it("falls back to the last lines when nothing explains itself", () => {
+    const tail = diagnosticLogTail(["a", "b", "c", "d", "e"]);
+    expect(tail).toBe("c | d | e");
+  });
+
+  it("is undefined for empty or absent logs", () => {
+    expect(diagnosticLogTail([])).toBeUndefined();
+    expect(diagnosticLogTail(null)).toBeUndefined();
+  });
+});
+
+describe("launchpadSimError with a framework error", () => {
+  it("reports the constraint and the account instead of a bare pubkey", () => {
+    const e = launchpadSimError("launch", { Custom: 2006 }, SEEDS_LOGS, null);
+    expect(e).toBeInstanceOf(CookieMcpError);
+    expect(e.message).toContain("ConstraintSeeds (2006)");
+    expect(e.message).toContain("`pool`");
+    expect(e.hint).toContain("nothing was sent");
+  });
+
+  it("still prefers the launchpad's own error table for a custom 6xxx code", () => {
+    const e = launchpadSimError(
+      "buy",
+      { Custom: 6011 },
+      [
+        "Program log: AnchorError occurred. Error Code: Whatever. Error Number: 6011. Error Message: x.",
+      ],
+      null,
+    );
+    expect(e.message).toContain("not in a tradeable state");
   });
 });
