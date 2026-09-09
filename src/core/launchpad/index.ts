@@ -854,13 +854,12 @@ export async function getLaunchpadPositions(args: {
   if (actionsPending) {
     notes.push(`${actionsPending} position(s) have something unclaimed — see each entry's action.`);
   }
-  if (!entries.length && !createdEntries.length) {
-    notes.push(
-      args.includeClosed
-        ? "This wallet has never traded on the MomoSwap launchpad."
-        : "Nothing outstanding. Pass includeClosed=true to also list fully exited positions.",
-    );
-  }
+  const empty = emptyPositionsNote({
+    poolsScanned: pools.length,
+    found: entries.length + createdEntries.length,
+    includeClosed: args.includeClosed === true,
+  });
+  if (empty) notes.push(empty);
 
   return {
     owner,
@@ -876,6 +875,34 @@ export async function getLaunchpadPositions(args: {
     },
     notes,
   };
+}
+
+/**
+ * What to say when the scan turned up nothing — which is two very different situations that used to
+ * render as one.
+ *
+ * `poolsScanned: 0` means the API's pool list came back EMPTY, so not one PDA was read. That is not the
+ * same claim as "this wallet holds nothing", and stating the latter is asserting a negative we never
+ * checked. Seen live on 2026-09-10: immediately after a launch the pool list lags the chain, so a
+ * position opened seconds earlier reported as an empty portfolio — and "Nothing outstanding" gives an
+ * agent no way to tell that apart from a genuine zero. `positions.ts` derives PDAs itself but still
+ * ENUMERATES from that list, so it inherits the lag no matter how good the on-chain reads are.
+ */
+export function emptyPositionsNote(args: {
+  poolsScanned: number;
+  found: number;
+  includeClosed: boolean;
+}): string | null {
+  if (args.poolsScanned === 0) {
+    return (
+      "The launchpad API returned no pools, so no position could be scanned — this is NOT a statement " +
+      "that the wallet holds nothing. The pool list lags the chain right after a launch; re-read in a minute."
+    );
+  }
+  if (args.found > 0) return null;
+  return args.includeClosed
+    ? "This wallet has never traded on the MomoSwap launchpad."
+    : "Nothing outstanding. Pass includeClosed=true to also list fully exited positions.";
 }
 
 export interface GetLaunchpadTokenResult extends LaunchpadPoolView {

@@ -14,6 +14,7 @@ import {
   anchorLogError,
   anchorLogSummary,
   diagnosticLogTail,
+  emptyPositionsNote,
   launchpadSimError,
   mapPoolView,
   positionAction,
@@ -764,5 +765,33 @@ describe("launchpadSimError with a framework error", () => {
       null,
     );
     expect(e.message).toContain("not in a tradeable state");
+  });
+});
+
+describe("emptyPositionsNote", () => {
+  it("does NOT claim the wallet is empty when nothing was scanned", () => {
+    const note = emptyPositionsNote({ poolsScanned: 0, found: 0, includeClosed: false })!;
+    expect(note).toContain("NOT a statement");
+    expect(note).not.toContain("Nothing outstanding");
+  });
+
+  it("says that even when positions were somehow found, since the scan was still blind", () => {
+    // Defensive: poolsScanned 0 with a non-zero `found` is incoherent, so the lag warning still wins.
+    expect(emptyPositionsNote({ poolsScanned: 0, found: 3, includeClosed: true })).toContain(
+      "no position could be scanned",
+    );
+  });
+
+  it("is silent when a real scan found something", () => {
+    expect(emptyPositionsNote({ poolsScanned: 2, found: 1, includeClosed: false })).toBeNull();
+  });
+
+  it("distinguishes a genuine zero, and offers includeClosed only when it is off", () => {
+    expect(emptyPositionsNote({ poolsScanned: 2, found: 0, includeClosed: false })).toContain(
+      "includeClosed=true",
+    );
+    expect(emptyPositionsNote({ poolsScanned: 2, found: 0, includeClosed: true })).toBe(
+      "This wallet has never traded on the MomoSwap launchpad.",
+    );
   });
 });
