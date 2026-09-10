@@ -7,7 +7,13 @@
 // NOT show up in `get_balance` and cannot be swapped with `trade`. Selling back to the curve
 // (launchpad_sell) is the only exit until the pool graduates; after graduation the holder claims the
 // real SPL token (claim_launchpad) and trades it normally.
-import { PublicKey, Transaction, type Connection, type Keypair } from "@solana/web3.js";
+import {
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+  type Connection,
+  type Keypair,
+} from "@solana/web3.js";
 import { getMint } from "@solana/spl-token";
 
 import {
@@ -16,6 +22,7 @@ import {
   COOK_SYMBOL,
   COOKIE_REFERRER,
   explorerTxUrl,
+  LAUNCHPAD_ALT_ADDRESS,
   launchpadPoolUrl,
   launchpadTokenUrl,
   PROGRAM_IDS,
@@ -276,6 +283,64 @@ export function sendFailure(what: string, e: unknown): CookieMcpError {
 }
 
 /**
+ * Check a v0 build's lookup tables against our own pinned address.
+ *
+ * The response's `lookupTables` is the API telling us how to interpret the transaction it just built,
+ * so it cannot be the thing we trust — the accounts an index resolves to are exactly what needs
+ * pinning. Returns null when the build is acceptable, or the reason to refuse. Exported for tests
+ * because this is the whole security argument for consuming a table at all.
+ */
+export function altPinMismatch(tables: string[] | undefined, pinned: string): string | null {
+  if (!pinned) {
+    return (
+      "this launch needs a versioned transaction that resolves accounts through the launchpad's " +
+      "address lookup table, but no table address is pinned in this build of cookie-mcp, so what those " +
+      "accounts resolve to cannot be verified"
+    );
+  }
+  const list = tables ?? [];
+  if (list.length === 0) return null; // no table referenced ⇒ nothing to resolve, nothing to pin
+  const unexpected = list.filter((t) => t !== pinned);
+  if (unexpected.length > 0) {
+    return (
+      `the launchpad built this transaction against an unexpected address lookup table ` +
+      `(${unexpected.join(", ")}); the pinned table is ${pinned}`
+    );
+  }
+  return null;
+}
+
+/**
+ * Refuse a dev buy we could never verify — BEFORE any network call.
+ *
+ * A dev buy forces a versioned build, and a versioned build is only signable if we can pin the lookup
+ * table it resolves through. Without a pin the launch is doomed, and finding that out after the build
+ * costs a real IPFS pin plus a leased vanity `momo` mint (rate-limited 5 per 600s), which is exactly
+ * the waste the backend's own up-front rejection was added to avoid. Same spirit as
+ * `assertLogoDecision`: decide what is impossible before spending anything.
+ */
+export function assertDevBuySupported(hasDevBuy: boolean, pinned: string): void {
+  if (!hasDevBuy || pinned) return;
+  throw new CookieMcpError(
+    "this build of cookie-mcp cannot launch with a dev buy: the launchpad's address lookup table is " +
+      "not pinned, so a versioned transaction's accounts could not be verified before signing",
+    "launch without the dev buy and buy right after it lands (launchpad_buy), or set " +
+      "MOMOSWAP_LAUNCHPAD_ALT to the launchpad's current frozen lookup table — nothing was sent",
+  );
+}
+
+/**
+ * Decode whichever shape the API returned. `txVersion` states it, so we never sniff the payload.
+ *
+ * A v0 payload throws inside `Transaction.from` rather than returning something wrong, so the legacy
+ * path stays exactly as strict as it was.
+ */
+export function deserializeBuilt(built: BuiltTx): Transaction | VersionedTransaction {
+  const bytes = Buffer.from(built.transactionBase64, "base64");
+  return built.txVersion === 0 ? VersionedTransaction.deserialize(bytes) : Transaction.from(bytes);
+}
+
+/**
  * Simulate an API-built, partial-signed legacy transaction, add our signature and send it.
  * The API sets the fee payer and blockhash, so we confirm against the window it returned.
  */
@@ -292,17 +357,36 @@ async function submitBuilt(
     );
   }
   const conn = getConnection();
-  let tx: Transaction;
+  let tx: Transaction | VersionedTransaction;
   try {
-    tx = Transaction.from(Buffer.from(built.transactionBase64, "base64"));
+    tx = deserializeBuilt(built);
   } catch {
     throw new CookieMcpError(
       `the ${what} transaction returned by the launchpad was malformed`,
       "retry; if it persists the launchpad API may be degraded",
     );
   }
+  // Before signing anything: a versioned build resolves accounts through a lookup table, and an
+  // unverifiable table means we cannot say what we are about to sign.
+  if (tx instanceof VersionedTransaction) {
+    const mismatch = altPinMismatch(built.lookupTables, LAUNCHPAD_ALT_ADDRESS);
+    if (mismatch) {
+      throw new CookieMcpError(
+        `refusing to sign this ${what}: ${mismatch}`,
+        "nothing was sent — update cookie-mcp (or set MOMOSWAP_LAUNCHPAD_ALT) to the launchpad's " +
+          "current frozen lookup table",
+      );
+    }
+  }
 
-  const sim = await conn.simulateTransaction(tx);
+  // The two overloads differ in a way that matters downstream: the LEGACY one rewrites
+  // `recentBlockhash` with a fresh one before simulating, the versioned one simulates the message as
+  // given (and so needs the API's blockhash to still be valid). `assertBlockhashUsable` below covers
+  // both, but for the versioned path it is load-bearing rather than belt-and-braces.
+  const sim =
+    tx instanceof VersionedTransaction
+      ? await conn.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false })
+      : await conn.simulateTransaction(tx);
   if (sim.value.err) {
     // The transaction itself says which deployment the API built against, which is what the error
     // codes belong to — no need to ask the chain.
@@ -325,7 +409,10 @@ async function submitBuilt(
   // — it would invalidate their signatures.
   await assertBlockhashUsable(conn, built, what);
 
-  tx.partialSign(keypair);
+  // Legacy takes a variadic; a VersionedTransaction takes an array and merges into the existing
+  // signature slots, which is what keeps the API's own partial signatures (the leased mint + vaults).
+  if (tx instanceof VersionedTransaction) tx.sign([keypair]);
+  else tx.partialSign(keypair);
   let signature: string;
   try {
     signature = await conn.sendRawTransaction(tx.serialize());
@@ -1344,6 +1431,12 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   }
   // Before any network call or spend: a logo is unfixable after the fact.
   assertLogoDecision(args);
+  // Same rule for a dev buy: if we cannot verify a versioned build, say so before pinning metadata
+  // and burning a leased mint on a launch that cannot be signed.
+  assertDevBuySupported(
+    args.devBuyCook != null || args.devBuyPctOfTotalSupply != null,
+    LAUNCHPAD_ALT_ADDRESS,
+  );
 
   const cfg = await fetchLaunchpadConfig();
   if (cfg.paused) {
@@ -1389,7 +1482,11 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
       creator,
       params,
       metadata,
-      ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString() } : {}),
+      // A dev buy REQUIRES a versioned build: create + buy in one transaction does not fit a legacy
+      // 1232-byte tx, and the legacy path refuses it for any real name/symbol ("leaves no room for the
+      // metadata link" — momoswap-backend #112/#120). A plain launch stays legacy, which keeps the
+      // v0 path off the common case until it has some mileage.
+      ...(devBuyRaw > 0n ? { devBuyCook: devBuyRaw.toString(), txVersion: 0 as const } : {}),
       session,
     }),
   );

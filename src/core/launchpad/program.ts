@@ -8,7 +8,7 @@
 // `get_launchpad_positions` returns an empty portfolio with no error at all. So we read the id off the
 // chain instead: a pool account's `owner` IS, by definition, the program that owns it. The configured
 // `PROGRAM_IDS.momoswapLaunchpad` is only the fallback for when we have nothing to read.
-import { PublicKey, type Transaction } from "@solana/web3.js";
+import { PublicKey, VersionedTransaction, type Transaction } from "@solana/web3.js";
 
 import { PROGRAM_IDS } from "../config";
 
@@ -39,11 +39,18 @@ const AMBIENT_PROGRAM_IDS = new Set([
  * in hand is the exact evidence — no RPC call needed. Returns null rather than guessing when more than
  * one non-ambient program is present, so the caller falls back instead of mistranslating.
  */
-export function launchpadProgramIdFromTx(tx: Transaction): string | null {
+export function launchpadProgramIdFromTx(tx: Transaction | VersionedTransaction): string | null {
   const candidates = new Set<string>();
-  for (const ix of tx.instructions) {
-    const id = ix.programId.toBase58();
-    if (!AMBIENT_PROGRAM_IDS.has(id)) candidates.add(id);
+  const ids =
+    tx instanceof VersionedTransaction
+      ? // A v0 message keeps every PROGRAM id in the static keys (the runtime requires it), so the
+        // programs are readable without resolving any lookup table.
+        tx.message.compiledInstructions.map((ix) =>
+          tx.message.staticAccountKeys[ix.programIdIndex]?.toBase58(),
+        )
+      : tx.instructions.map((ix) => ix.programId.toBase58());
+  for (const id of ids) {
+    if (id && !AMBIENT_PROGRAM_IDS.has(id)) candidates.add(id);
   }
   return candidates.size === 1 ? [...candidates][0]! : null;
 }

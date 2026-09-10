@@ -96,6 +96,22 @@ export const PROGRAM_IDS = {
   cookieDomainsMarket: "Ey35mr69UfiQqZSwD2qYAZoMNfnuVJGCjwNSB64ppHm7",
 } as const;
 
+/**
+ * The launchpad's create-pool Address Lookup Table, PINNED here rather than taken from the build.
+ *
+ * A v0 create-pool build resolves 5 deployment-wide accounts through this table, so the table decides
+ * what those account slots MEAN. The response also names the tables it used, but trusting that field
+ * would be circular: the party that built the transaction would be telling us how to interpret it, and
+ * the account list is precisely what we want to pin down. So we compare the build's tables against this
+ * constant and refuse a mismatch.
+ *
+ * It is safe to pin because the table is FROZEN on chain (its authority dropped), which is also what
+ * makes the comparison meaningful — a mutable table could be repointed after we approved it.
+ * Empty string ⇒ we have no pin yet, and a v0 build is refused outright rather than trusted blindly.
+ * Override only to talk to a non-production deployment.
+ */
+export const LAUNCHPAD_ALT_ADDRESS = process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "";
+
 // The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field
 // both store the bare label ("bot", not "bot.cook").
 export const COOK_TLD = ".cook";

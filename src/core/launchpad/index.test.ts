@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { PublicKey, SystemProgram, Transaction, VersionedTransaction } from "@solana/web3.js";
 
 import {
   assertLogoDecision,
@@ -13,6 +14,9 @@ import {
   launchpadRouteMessage,
   anchorLogError,
   anchorLogSummary,
+  altPinMismatch,
+  assertDevBuySupported,
+  deserializeBuilt,
   diagnosticLogTail,
   emptyPositionsNote,
   launchpadSimError,
@@ -793,5 +797,100 @@ describe("emptyPositionsNote", () => {
     expect(emptyPositionsNote({ poolsScanned: 2, found: 0, includeClosed: true })).toBe(
       "This wallet has never traded on the MomoSwap launchpad.",
     );
+  });
+});
+
+describe("altPinMismatch", () => {
+  const PIN = "A1tPinnedTab1e11111111111111111111111111111";
+  const OTHER = "0therTab1e2222222222222222222222222222222222";
+
+  it("accepts a build that uses exactly the pinned table", () => {
+    expect(altPinMismatch([PIN], PIN)).toBeNull();
+  });
+
+  it("refuses a table we did not pin — the API must not choose what an index means", () => {
+    const why = altPinMismatch([OTHER], PIN)!;
+    expect(why).toContain(OTHER);
+    expect(why).toContain(PIN);
+  });
+
+  it("refuses when ANY of several tables is unexpected", () => {
+    expect(altPinMismatch([PIN, OTHER], PIN)).not.toBeNull();
+  });
+
+  it("refuses everything when no pin is configured, rather than trusting the response", () => {
+    // Fail closed: with no pin there is nothing to verify against, so a v0 build is unusable — never
+    // "no pin, therefore anything goes".
+    expect(altPinMismatch([PIN], "")).not.toBeNull();
+    expect(altPinMismatch(undefined, "")).not.toBeNull();
+    expect(altPinMismatch([], "")).not.toBeNull();
+  });
+
+  it("passes a build that references no table at all", () => {
+    // Nothing is resolved indirectly, so there is nothing to pin — the tx states its own accounts.
+    expect(altPinMismatch(undefined, PIN)).toBeNull();
+    expect(altPinMismatch([], PIN)).toBeNull();
+  });
+});
+
+describe("deserializeBuilt", () => {
+  // A legacy tx with one instruction, serialized the way the API sends it.
+  function legacyBase64(): string {
+    const payer = new PublicKey("FFWfqNZGQKun8d1iePAnqkrob359Do2qXwV7CqvF4wq2");
+    const tx = new Transaction();
+    tx.add(SystemProgram.transfer({ fromPubkey: payer, toPubkey: payer, lamports: 1 }));
+    tx.recentBlockhash = "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi";
+    tx.feePayer = payer;
+    return tx
+      .serialize({ requireAllSignatures: false, verifySignatures: false })
+      .toString("base64");
+  }
+
+  it("decodes a legacy payload when txVersion is absent", () => {
+    const tx = deserializeBuilt({
+      transactionBase64: legacyBase64(),
+      blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+      lastValidBlockHeight: 1,
+    });
+    expect(tx).toBeInstanceOf(Transaction);
+  });
+
+  it("follows the stated txVersion, and VersionedTransaction tolerates a legacy payload", () => {
+    // Worth pinning because it is asymmetric and easy to get backwards:
+    // `VersionedTransaction.deserialize` ACCEPTS legacy bytes (wrapping them as a legacy message),
+    // while `Transaction.from` throws on a versioned payload. So mis-stating txVersion as 0 degrades
+    // gracefully, but omitting it on a real v0 build fails loudly — which is the safe direction, and
+    // why the signing branch keys off `instanceof` rather than the field.
+    const tx = deserializeBuilt({
+      transactionBase64: legacyBase64(),
+      blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+      lastValidBlockHeight: 1,
+      txVersion: 0,
+    });
+    expect(tx).toBeInstanceOf(VersionedTransaction);
+    expect((tx as VersionedTransaction).message.version).toBe("legacy");
+  });
+});
+
+describe("assertDevBuySupported", () => {
+  it("throws before any spend when a dev buy is asked for with no pinned table", () => {
+    expect(() => assertDevBuySupported(true, "")).toThrow(CookieMcpError);
+    try {
+      assertDevBuySupported(true, "");
+    } catch (e) {
+      // The agent needs the workaround, not just a refusal — a plain launch plus launchpad_buy works.
+      expect((e as CookieMcpError).hint).toContain("launchpad_buy");
+      expect((e as CookieMcpError).hint).toContain("nothing was sent");
+    }
+  });
+
+  it("allows a dev buy once a table is pinned", () => {
+    expect(() =>
+      assertDevBuySupported(true, "A1tPinnedTab1e11111111111111111111111111111"),
+    ).not.toThrow();
+  });
+
+  it("never blocks a plain launch, pinned or not", () => {
+    expect(() => assertDevBuySupported(false, "")).not.toThrow();
   });
 });
