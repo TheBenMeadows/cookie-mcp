@@ -3,6 +3,7 @@
 // an UNSIGNED v0 transaction (fee payer = our wallet, ephemeral leg signers already applied), which we
 // simulate on our own RPC, sign locally, send, and confirm — same non-custodial shape as Candy Shop.
 import { COOKIEBOX_AGG_API_URL } from "./config";
+import { CookieMcpError } from "./errors";
 import { fetchJson } from "./http";
 import type { CandyShopMultiRoute } from "./candyshop";
 
@@ -41,6 +42,41 @@ export interface AggSwapTx {
   blockhash: string;
   lastValidBlockHeight: number;
   route: AggQuote;
+  /** Echo of the native-side flags the server built with (absent on builds that predate them). */
+  wrapSol?: boolean;
+  unwrapSol?: boolean;
+}
+
+/**
+ * How the agg handles native COOK on a swap. Both default to `true` (COOK in, COOK out; the tx
+ * wraps into a throwaway account and unwraps at the end, never touching our wCOOK ATA).
+ * `wrapSol: false` pays a native input straight from our wCOOK ATA; `unwrapSol: false` delivers a
+ * native output to it as wCOOK. COOK and wCOOK are the same mint, so this is the ONLY way to say
+ * which one you mean.
+ */
+export interface AggNativeFlags {
+  wrapSol?: boolean;
+  unwrapSol?: boolean;
+}
+
+/**
+ * An agg build that predates `wrapSol`/`unwrapSol` ignores them and unwraps — the user would get
+ * COOK where they asked for wCOOK. It also doesn't echo them, so a non-default request without a
+ * matching echo is refused BEFORE signing. A default request is safe against any build.
+ */
+export function assertAggNativeFlagsHonoured(
+  requested: AggNativeFlags,
+  echoed: AggNativeFlags,
+): void {
+  const wrapSol = requested.wrapSol ?? true;
+  const unwrapSol = requested.unwrapSol ?? true;
+  if (wrapSol && unwrapSol) return;
+  if ((echoed.wrapSol ?? true) !== wrapSol || (echoed.unwrapSol ?? true) !== unwrapSol) {
+    throw new CookieMcpError(
+      "the Cookiebox aggregator did not honour wrapSol/unwrapSol (build predates them)",
+      "omit the flags to swap plain COOK, or retry once agg.cookiebox.app is redeployed",
+    );
+  }
 }
 
 /**
@@ -117,16 +153,20 @@ export async function quoteAgg(
  * Ask the agg to build the swap: it re-quotes and returns an unsigned v0 tx. The caller simulates,
  * signs, sends, and confirms on our own RPC using the returned blockhash/height.
  */
-export async function buildAggSwapTx(args: {
-  inputMint: string;
-  outputMint: string;
-  amount: string;
-  slippageBps: number;
-  owner: string;
-}): Promise<AggSwapTx> {
-  return fetchJson<AggSwapTx>(`${COOKIEBOX_AGG_API_URL}/swap-tx`, {
+export async function buildAggSwapTx(
+  args: {
+    inputMint: string;
+    outputMint: string;
+    amount: string;
+    slippageBps: number;
+    owner: string;
+  } & AggNativeFlags,
+): Promise<AggSwapTx> {
+  const built = await fetchJson<AggSwapTx>(`${COOKIEBOX_AGG_API_URL}/swap-tx`, {
     method: "POST",
     body: JSON.stringify(args),
     timeoutMs: SWAP_TX_TIMEOUT_MS,
   });
+  assertAggNativeFlagsHonoured(args, built);
+  return built;
 }

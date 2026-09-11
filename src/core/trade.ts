@@ -138,12 +138,27 @@ export async function trade(args: {
   slippageBps?: number;
   aggregator?: SwapAggregator;
   chain?: TradeChain;
+  /** Cookiebox aggregator only — see `AggNativeFlags`. */
+  wrapSol?: boolean;
+  unwrapSol?: boolean;
 }): Promise<TradeResult> {
   const { keypair } = requireWallet();
   const slippageBps = args.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
   const chain = args.chain ?? "cookie";
   if (args.inputMint === args.outputMint) {
     throw new CookieMcpError("inputMint and outputMint are the same", "pick two different tokens");
+  }
+  // wCOOK sides are a Cookiebox-aggregator feature: Candy Shop and Jupiter build their own txs and
+  // unwrap as they please, so a non-default flag there would be silently ignored.
+  const wantsWrapped = args.wrapSol === false || args.unwrapSol === false;
+  if (
+    wantsWrapped &&
+    (chain === "solana" || (args.aggregator ?? DEFAULT_SWAP_AGGREGATOR) !== "cookiebox")
+  ) {
+    throw new CookieMcpError(
+      "wrapSol/unwrapSol are only supported by the cookiebox aggregator on Cookie Chain",
+      'use aggregator "cookiebox" (and chain "cookie"), or omit the flags',
+    );
   }
   if (chain === "solana") return tradeSolana(args, slippageBps, keypair);
   const aggregator = args.aggregator ?? DEFAULT_SWAP_AGGREGATOR;
@@ -179,8 +194,11 @@ export async function trade(args: {
         amount: amountRaw.toString(),
         slippageBps,
         owner: keypair.publicKey.toBase58(),
+        ...(args.wrapSol !== undefined ? { wrapSol: args.wrapSol } : {}),
+        ...(args.unwrapSol !== undefined ? { unwrapSol: args.unwrapSol } : {}),
       });
     } catch (e) {
+      if (e instanceof CookieMcpError) throw e; // our own pre-sign refusal, not a routing failure
       // A 422 "route too large" is a build-size failure, not a missing route — don't let it be
       // rewritten into the (misleading) no-route/launchpad message. Rare now that the agg keeps a
       // server-owned lookup table, but still possible (e.g. agg deployed without its ALT keypair).

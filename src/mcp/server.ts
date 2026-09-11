@@ -297,7 +297,9 @@ registerTool(
       "via Jupiter, paying fees in SOL. Scoped to COOK: one of inputMint/outputMint MUST be " +
       "36ZrtQoab5MhhySaP1YSTwUahSk6GRVUTtZ6cuVfm9e1 — unrelated Solana pairs are refused. The SAME " +
       "COOKIE_PRIVATE_KEY signs on both chains, and that path requires SOLANA_RPC_URL to point at a " +
-      "dedicated RPC (the public endpoint is refused). On Solana So1111..112 is wSOL, NOT COOK.",
+      "dedicated RPC (the public endpoint is refused). On Solana So1111..112 is wSOL, NOT COOK. " +
+      "COOK and wCOOK (wrapped, SPL) share the native mint: pass `wrapSol: false` to pay from a " +
+      "wCOOK balance, `unwrapSol: false` to receive wCOOK (cookiebox aggregator only).",
     inputSchema: {
       inputMint: z
         .string()
@@ -327,6 +329,18 @@ registerTool(
         .describe(
           'which chain to swap on; defaults to cookie (Cookie Chain). "solana" buys/sells COOK on Solana mainnet via Jupiter (a COOK leg is required) and REQUIRES SOLANA_RPC_URL to be set to a dedicated RPC',
         ),
+      wrapSol: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true. false = the input is wCOOK: pay from the wallet's wrapped-COOK token account instead of wrapping native COOK. Cookiebox aggregator only",
+        ),
+      unwrapSol: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true. false = receive wCOOK: leave a native-COOK output in the wallet's wrapped-COOK token account instead of unwrapping it. Cookiebox aggregator only",
+        ),
     },
   },
   tool(
@@ -337,6 +351,8 @@ registerTool(
       slippageBps?: number;
       aggregator?: "cookiebox" | "cookiescan";
       chain?: "cookie" | "solana";
+      wrapSol?: boolean;
+      unwrapSol?: boolean;
     }) => trade(a),
   ),
 );

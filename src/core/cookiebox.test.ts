@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { routeFromAggQuote, type AggQuote } from "./cookiebox";
+import { assertAggNativeFlagsHonoured, routeFromAggQuote, type AggQuote } from "./cookiebox";
 
 const COOK = "So11111111111111111111111111111111111111112";
 const MON = "6H7xnYfBFeEU8S8mhrZRkFNS5vEegRqEwv7h42WbntCL";
@@ -87,5 +87,30 @@ describe("routeFromAggQuote", () => {
     });
     expect(r.segments[0].percentage).toBe(42);
     expect(Number.isNaN(r.combinedPriceImpactPct)).toBe(true);
+  });
+});
+
+describe("assertAggNativeFlagsHonoured", () => {
+  it("a default request is fine against any build, echo or not", () => {
+    expect(() => assertAggNativeFlagsHonoured({}, {})).not.toThrow();
+    expect(() =>
+      assertAggNativeFlagsHonoured(
+        { wrapSol: true, unwrapSol: true },
+        { wrapSol: true, unwrapSol: true },
+      ),
+    ).not.toThrow();
+  });
+
+  it("a wCOOK request the server didn't echo is refused", () => {
+    expect(() => assertAggNativeFlagsHonoured({ unwrapSol: false }, {})).toThrow(/did not honour/);
+    expect(() =>
+      assertAggNativeFlagsHonoured({ wrapSol: false }, { wrapSol: true, unwrapSol: true }),
+    ).toThrow(/did not honour/);
+  });
+
+  it("a wCOOK request the server honoured passes", () => {
+    expect(() =>
+      assertAggNativeFlagsHonoured({ unwrapSol: false }, { wrapSol: true, unwrapSol: false }),
+    ).not.toThrow();
   });
 });
