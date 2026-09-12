@@ -23,6 +23,7 @@ import {
   COOKIE_REFERRER,
   explorerTxUrl,
   LAUNCHPAD_ALT_ADDRESS,
+  LAUNCHPAD_ALT_KEYS,
   launchpadPoolUrl,
   launchpadTokenUrl,
   PROGRAM_IDS,
@@ -330,6 +331,81 @@ export function assertDevBuySupported(hasDevBuy: boolean, pinned: string): void 
 }
 
 /**
+ * Why a pinned ADDRESS is not the end of the check, and what we verify instead.
+ *
+ * A v0 build carries table indices, so the table decides what its account slots mean. Matching the
+ * address only says the builder used the table we expected — not what that table says right now. A
+ * table stays mutable until its authority is dropped, so the honest check is against the live account:
+ * the entries we pinned, still there, in the same order, and the account immutable and usable.
+ *
+ * Pure so every refusal is testable. `table` is what the RPC returned (null when the account is
+ * missing). Returns null to proceed, or the reason to refuse.
+ */
+export function altAccountMismatch(
+  table: {
+    state: { authority?: PublicKey; addresses: PublicKey[]; deactivationSlot: bigint };
+  } | null,
+  expected: readonly string[],
+): string | null {
+  if (!table) return "the launchpad's address lookup table does not exist on chain";
+  if (table.state.authority) {
+    return (
+      `the lookup table is still mutable (authority ${table.state.authority.toBase58()}), so what its ` +
+      "indices resolve to could change after this transaction was built"
+    );
+  }
+  // A table can be DEACTIVATED, after which it stops being usable for new transactions once the
+  // cooldown passes — and it would otherwise sail past an authority-and-addresses check while the
+  // transaction fails on chain for a reason nothing here explained.
+  if (table.state.deactivationSlot !== 2n ** 64n - 1n) {
+    return "the lookup table has been deactivated, so it can no longer be used to build transactions";
+  }
+  const have = table.state.addresses;
+  for (const [i, want] of expected.entries()) {
+    const got = have[i]?.toBase58();
+    if (got !== want) {
+      return (
+        `the lookup table's entry [${i}] is ${got ?? "missing"}, expected ${want} — its contents are ` +
+        "not what this build of cookie-mcp pinned"
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Read the pinned table and refuse to sign unless it is exactly what we committed to. One RPC call,
+ * only on the versioned path, and only before signing — nothing has been sent at this point.
+ */
+async function assertAltTrustworthy(conn: Connection, what: string): Promise<void> {
+  let table: Awaited<ReturnType<Connection["getAddressLookupTable"]>>["value"];
+  try {
+    table = (
+      await conn.getAddressLookupTable(new PublicKey(LAUNCHPAD_ALT_ADDRESS), {
+        commitment: "confirmed",
+      })
+    ).value;
+  } catch (e) {
+    // A read failure is not evidence of tampering, but it is also not evidence of safety, and this is
+    // the one check standing between a table swap and a signature. Refuse rather than assume.
+    throw new CookieMcpError(
+      `could not read the launchpad's address lookup table to verify this ${what}: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+      "nothing was sent — retry; if it persists the RPC may be degraded",
+    );
+  }
+  const mismatch = altAccountMismatch(table, LAUNCHPAD_ALT_KEYS);
+  if (mismatch) {
+    throw new CookieMcpError(
+      `refusing to sign this ${what}: ${mismatch}`,
+      "nothing was sent — this should not happen for a frozen table, so treat it as a sign that the " +
+        "launchpad moved to a different one and cookie-mcp needs updating",
+    );
+  }
+}
+
+/**
  * Decode whichever shape the API returned. `txVersion` states it, so we never sniff the payload.
  *
  * A v0 payload throws inside `Transaction.from` rather than returning something wrong, so the legacy
@@ -377,6 +453,8 @@ async function submitBuilt(
           "current frozen lookup table",
       );
     }
+    // The address matched; now check the table itself still says what we pinned.
+    await assertAltTrustworthy(conn, what);
   }
 
   // The two overloads differ in a way that matters downstream: the LEGACY one rewrites

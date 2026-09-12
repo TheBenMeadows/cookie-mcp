@@ -110,7 +110,29 @@ export const PROGRAM_IDS = {
  * Empty string ⇒ we have no pin yet, and a v0 build is refused outright rather than trusted blindly.
  * Override only to talk to a non-production deployment.
  */
-export const LAUNCHPAD_ALT_ADDRESS = process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "";
+export const LAUNCHPAD_ALT_ADDRESS =
+  process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "CawUNMrsk6KwjXZ8kNPQgC1obMD4QM5oqvo3rF2bErX6";
+
+/**
+ * What that table must contain, in on-chain order — checked against the live account before we sign a
+ * versioned build (`assertAltTrustworthy`).
+ *
+ * Pinning the ADDRESS alone would not be enough on its own: a table is mutable until its authority is
+ * dropped, so an address-only pin says "the builder used the table I expected" without saying what that
+ * table currently means. Pinning the contents turns the check into one we can actually fail — and since
+ * we hold an RPC connection (unlike a browser), we verify the real account rather than resolving from a
+ * local copy. Index IS the identity here: a re-order repoints every transaction built against it.
+ *
+ * Published + frozen for the `momoL7wu…` deployment on Cookie Chain, genesis
+ * `9wDaBRDgArEUpvhHxGguNkwozsZh4UpGZB9o2EoEcBB2` (momoswap-backend #123).
+ */
+export const LAUNCHPAD_ALT_KEYS = [
+  "8nj4iBHZugPZ4T1NPM47zazSjhp68gHYkX6GbLdmT3AP", // launchpad config PDA (owned by momoL7wu…)
+  "So11111111111111111111111111111111111111112", // payment mint (wCOOK)
+  "SysvarRent111111111111111111111111111111111", // rent sysvar
+  "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni", // config.treasuryLamports
+  "7PwH1Q65fAjTD9LjNWakD7iXMhZRF57W5F1Uj6ggYpuf", // config.treasuryPayment
+] as const;
 
 // The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field
 // both store the bare label ("bot", not "bot.cook").

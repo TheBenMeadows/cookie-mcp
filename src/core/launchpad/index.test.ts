@@ -14,6 +14,7 @@ import {
   launchpadRouteMessage,
   anchorLogError,
   anchorLogSummary,
+  altAccountMismatch,
   altPinMismatch,
   assertDevBuySupported,
   deserializeBuilt,
@@ -892,5 +893,63 @@ describe("assertDevBuySupported", () => {
 
   it("never blocks a plain launch, pinned or not", () => {
     expect(() => assertDevBuySupported(false, "")).not.toThrow();
+  });
+});
+
+describe("altAccountMismatch", () => {
+  const KEYS = [
+    "8nj4iBHZugPZ4T1NPM47zazSjhp68gHYkX6GbLdmT3AP",
+    "So11111111111111111111111111111111111111112",
+    "SysvarRent111111111111111111111111111111111",
+    "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni",
+    "7PwH1Q65fAjTD9LjNWakD7iXMhZRF57W5F1Uj6ggYpuf",
+  ] as const;
+  const ACTIVE = 2n ** 64n - 1n;
+  const table = (
+    addresses: readonly string[],
+    opts: { authority?: string; deactivationSlot?: bigint } = {},
+  ) => ({
+    state: {
+      authority: opts.authority ? new PublicKey(opts.authority) : undefined,
+      addresses: addresses.map((a) => new PublicKey(a)),
+      deactivationSlot: opts.deactivationSlot ?? ACTIVE,
+    },
+  });
+
+  it("accepts the real frozen table (the production values, asserted literally)", () => {
+    expect(altAccountMismatch(table(KEYS), KEYS)).toBeNull();
+  });
+
+  it("refuses a table that does not exist", () => {
+    expect(altAccountMismatch(null, KEYS)).toContain("does not exist");
+  });
+
+  it("refuses a table that still has an authority, naming it", () => {
+    const why = altAccountMismatch(table(KEYS, { authority: KEYS[3] }), KEYS)!;
+    expect(why).toContain("still mutable");
+    expect(why).toContain(KEYS[3]);
+  });
+
+  it("refuses a DEACTIVATED table, which an authority+addresses check would miss", () => {
+    // Deactivation is invisible to the fields everything else looks at, and the transaction would fail
+    // on chain with nothing here having explained why.
+    expect(altAccountMismatch(table(KEYS, { deactivationSlot: 12345n }), KEYS)).toContain(
+      "deactivated",
+    );
+  });
+
+  it("refuses REORDERED contents, since the index is the identity", () => {
+    const swapped = [KEYS[1], KEYS[0], ...KEYS.slice(2)];
+    const why = altAccountMismatch(table(swapped), KEYS)!;
+    expect(why).toContain("[0]");
+  });
+
+  it("refuses a truncated table and says which entry is missing", () => {
+    expect(altAccountMismatch(table(KEYS.slice(0, 3)), KEYS)).toContain("[3] is missing");
+  });
+
+  it("tolerates extra entries appended after the ones we pinned", () => {
+    // Append-only growth keeps indices 0..4 meaning what they meant.
+    expect(altAccountMismatch(table([...KEYS, KEYS[0]]), KEYS)).toBeNull();
   });
 });
