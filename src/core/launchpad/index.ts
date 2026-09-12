@@ -1691,7 +1691,11 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
       opensAt: new Date((pool?.launchTs ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
       endsAt: pool ? new Date(pool.endTs * 1000).toISOString() : null,
       expiryMode: params.expiry_mode,
-      antiSnipe: params.anti_snipe,
+      // Report what the POOL says, not what we asked for. A bundled dev buy makes the program force
+      // anti_snipe off (the dev buy is protected by being atomic and first, and the opening-window cap
+      // would otherwise cap the creator's own buy), so echoing the request claims a protection the
+      // launch does not have — and the launch is immutable, so the claim can never be corrected.
+      antiSnipe: pool?.antiSnipe ?? params.anti_snipe,
     },
     graduationTargetCook: rawToUi(pool?.graduationTarget ?? cfg.graduationTarget, COOK_DECIMALS),
     links: {

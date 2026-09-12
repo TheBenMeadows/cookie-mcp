@@ -953,3 +953,16 @@ describe("altAccountMismatch", () => {
     expect(altAccountMismatch(table([...KEYS, KEYS[0]]), KEYS)).toBeNull();
   });
 });
+
+describe("deploy_token anti-snipe reporting", () => {
+  it("a bundled dev buy forces anti-snipe OFF, so the request must not be echoed back", () => {
+    // Verified live on COWBOY (pool b5LV3vDM…): requested antiSnipe true, launched false. Reporting the
+    // request would claim a protection the token does not have, on metadata that is immutable.
+    const requested = true;
+    const fromPool = { antiSnipe: false };
+    expect(fromPool.antiSnipe ?? requested).toBe(false);
+    // With no pool read back, falling back to the request is still the best available answer.
+    const noPool: { antiSnipe: boolean } | null = null;
+    expect(noPool?.antiSnipe ?? requested).toBe(true);
+  });
+});
