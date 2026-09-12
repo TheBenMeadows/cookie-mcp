@@ -96,6 +96,44 @@ export const PROGRAM_IDS = {
   cookieDomainsMarket: "Ey35mr69UfiQqZSwD2qYAZoMNfnuVJGCjwNSB64ppHm7",
 } as const;
 
+/**
+ * The launchpad's create-pool Address Lookup Table, PINNED here rather than taken from the build.
+ *
+ * A v0 create-pool build resolves 5 deployment-wide accounts through this table, so the table decides
+ * what those account slots MEAN. The response also names the tables it used, but trusting that field
+ * would be circular: the party that built the transaction would be telling us how to interpret it, and
+ * the account list is precisely what we want to pin down. So we compare the build's tables against this
+ * constant and refuse a mismatch.
+ *
+ * It is safe to pin because the table is FROZEN on chain (its authority dropped), which is also what
+ * makes the comparison meaningful — a mutable table could be repointed after we approved it.
+ * Empty string ⇒ we have no pin yet, and a v0 build is refused outright rather than trusted blindly.
+ * Override only to talk to a non-production deployment.
+ */
+export const LAUNCHPAD_ALT_ADDRESS =
+  process.env.MOMOSWAP_LAUNCHPAD_ALT?.trim() || "CawUNMrsk6KwjXZ8kNPQgC1obMD4QM5oqvo3rF2bErX6";
+
+/**
+ * What that table must contain, in on-chain order — checked against the live account before we sign a
+ * versioned build (`assertAltTrustworthy`).
+ *
+ * Pinning the ADDRESS alone would not be enough on its own: a table is mutable until its authority is
+ * dropped, so an address-only pin says "the builder used the table I expected" without saying what that
+ * table currently means. Pinning the contents turns the check into one we can actually fail — and since
+ * we hold an RPC connection (unlike a browser), we verify the real account rather than resolving from a
+ * local copy. Index IS the identity here: a re-order repoints every transaction built against it.
+ *
+ * Published + frozen for the `momoL7wu…` deployment on Cookie Chain, genesis
+ * `9wDaBRDgArEUpvhHxGguNkwozsZh4UpGZB9o2EoEcBB2` (momoswap-backend #123).
+ */
+export const LAUNCHPAD_ALT_KEYS = [
+  "8nj4iBHZugPZ4T1NPM47zazSjhp68gHYkX6GbLdmT3AP", // launchpad config PDA (owned by momoL7wu…)
+  "So11111111111111111111111111111111111111112", // payment mint (wCOOK)
+  "SysvarRent111111111111111111111111111111111", // rent sysvar
+  "9rj5GEEypdCbJ1W9is4LHeQxg86h9vxSny6pmsxmakni", // config.treasuryLamports
+  "7PwH1Q65fAjTD9LjNWakD7iXMhZRF57W5F1Uj6ggYpuf", // config.treasuryPayment
+] as const;
+
 // The `.cook` suffix is presentation only: the on-chain PDA seed and the `DomainAccount.name` field
 // both store the bare label ("bot", not "bot.cook").
 export const COOK_TLD = ".cook";

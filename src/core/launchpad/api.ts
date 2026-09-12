@@ -148,6 +148,20 @@ export interface BuiltTx {
   lastValidBlockHeight: number;
   /** create-pool only: the leased `momo` mint the token will be created at. */
   mint?: string;
+  /**
+   * `0` when the payload is a v0 `VersionedTransaction` (create-pool with `txVersion: 0`), absent for
+   * the legacy builds every other endpoint returns. Stated by the API so we never sniff the payload to
+   * pick a decoder — see `deserializeBuilt`.
+   */
+  txVersion?: 0;
+  /**
+   * Addresses of the address lookup tables a v0 build resolves against.
+   *
+   * INFORMATIONAL ONLY, and treating it as authoritative would defeat the point: the accounts an index
+   * resolves to are exactly what we are trying to pin down, so a table named by the same party that
+   * built the transaction proves nothing. We check it against our own pinned constant instead.
+   */
+  lookupTables?: string[];
 }
 
 type Envelope<T> = T & { success?: boolean; error?: string };
@@ -332,6 +346,12 @@ export async function buildCreatePoolTx(body: {
   metadata: LaunchpadMetadata;
   devBuyCook?: string;
   session: string;
+  /**
+   * Ask for a v0 build over the launchpad's address lookup table. Required for a DEV BUY: the
+   * create + buy bundle does not fit a legacy transaction, and the legacy path refuses it with
+   * "leaves no room for the metadata link" for any real name/symbol (momoswap-backend #112/#120).
+   */
+  txVersion?: 0;
 }): Promise<BuiltTx> {
   return post<BuiltTx>("/tx/create-pool", body, "launch build", UPLOAD_TIMEOUT_MS);
 }
