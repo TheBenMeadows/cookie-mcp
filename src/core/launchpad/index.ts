@@ -9,12 +9,18 @@
 // real SPL token (claim_launchpad) and trades it normally.
 import {
   PublicKey,
+  SystemProgram,
   Transaction,
   VersionedTransaction,
   type Connection,
   type Keypair,
 } from "@solana/web3.js";
-import { getMint } from "@solana/spl-token";
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
+  getAssociatedTokenAddressSync,
+  getMint,
+} from "@solana/spl-token";
 
 import {
   COOK_DECIMALS,
@@ -309,6 +315,61 @@ export function altPinMismatch(tables: string[] | undefined, pinned: string): st
     );
   }
   return null;
+}
+
+/**
+ * Top the creator's wCOOK ATA up to `needRaw`, as a SEPARATE transaction before the launch.
+ *
+ * The launch bundle creates that ATA (idempotently) but never funds it — the backend's builder says so
+ * outright: the dev-buy leg spends from the creator's wCOOK account, "pre-funded by the client's wrap
+ * step". There is no room to do it in the same transaction; fitting create + buy at all is what the
+ * lookup table exists for. So a dev buy with an empty wCOOK balance simulates as a failed transfer,
+ * after the API has already pinned metadata and leased a rate-limited vanity mint.
+ *
+ * Only ever tops up the shortfall, and only when a dev buy was asked for. Returns the signature when it
+ * sent one, or null when the balance already covered it.
+ */
+async function ensureWrappedCook(
+  conn: Connection,
+  keypair: Keypair,
+  needRaw: bigint,
+): Promise<string | null> {
+  const owner = keypair.publicKey;
+  const ata = getAssociatedTokenAddressSync(new PublicKey(COOK_MINT), owner, true);
+  let haveRaw = 0n;
+  try {
+    const bal = await conn.getTokenAccountBalance(ata, "confirmed");
+    haveRaw = BigInt(bal.value.amount);
+  } catch {
+    // No account yet — the idempotent create below covers it, and the shortfall is the full amount.
+  }
+  if (haveRaw >= needRaw) return null;
+  const shortfall = needRaw - haveRaw;
+
+  const tx = new Transaction().add(
+    createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, new PublicKey(COOK_MINT)),
+    SystemProgram.transfer({ fromPubkey: owner, toPubkey: ata, lamports: shortfall }),
+    createSyncNativeInstruction(ata),
+  );
+  tx.feePayer = owner;
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  const sim = await conn.simulateTransaction(tx);
+  if (sim.value.err) {
+    throw launchpadSimError("wrapping COOK for the dev buy", sim.value.err, sim.value.logs ?? null);
+  }
+  tx.partialSign(keypair);
+  let signature: string;
+  try {
+    signature = await conn.sendRawTransaction(tx.serialize());
+  } catch (e) {
+    throw sendFailure("COOK wrap for the dev buy", e);
+  }
+  return confirmSent(
+    conn,
+    { signature, blockhash, lastValidBlockHeight },
+    "COOK wrap for the dev buy",
+  );
 }
 
 /**
@@ -1538,6 +1599,14 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
         ? uiToRaw(args.devBuyCook, COOK_DECIMALS)
         : 0n;
 
+  // Fund the wCOOK the dev-buy leg will spend, BEFORE the logo is pinned and a vanity mint is leased.
+  // The launch bundle creates that account but never funds it, so an unfunded wallet would otherwise
+  // fail at simulation having already burned a pin and a rate-limited mint.
+  let wrapSignature: string | null = null;
+  if (devBuyRaw > 0n) {
+    wrapSignature = await ensureWrappedCook(getConnection(), keypair, devBuyRaw);
+  }
+
   // Pin the logo first and reference its URL from the metadata JSON (never inline the base64 blob).
   let imageUrl: string | undefined;
   if (args.imageUrl) {
@@ -1591,6 +1660,14 @@ export async function deployToken(args: DeployTokenArgs): Promise<DeployTokenRes
   ];
   if (devBuyRaw > 0n) {
     notes.push("The dev buy was bundled into the same transaction, so it is the first trade.");
+    if (wrapSignature) {
+      // A separate, already-confirmed transaction — say so, so the launch signature is not mistaken
+      // for the whole spend.
+      notes.push(
+        `Wrapped ${rawToUi(devBuyRaw, COOK_DECIMALS)} ${COOK_SYMBOL} to fund the dev buy first, in ` +
+          `transaction ${wrapSignature}.`,
+      );
+    }
     // Always state both denominators: "1% of supply" means two different amounts depending on
     // whether it is read against the minted supply or the 80% actually sold on the curve.
     const share = describeDevBuy(cfg, devBuyRaw);
