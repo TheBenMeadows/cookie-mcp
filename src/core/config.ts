@@ -94,6 +94,10 @@ export const PROGRAM_IDS = {
   // The `.cook` domain marketplace behind market.cookoven.xyz. Same treatment as the registry: one
   // deployment, hardcoded. It shares the registry's upgrade authority (`2ABpDq4q…`).
   cookieDomainsMarket: "Ey35mr69UfiQqZSwD2qYAZoMNfnuVJGCjwNSB64ppHm7",
+  // Cookiebox limit-order escrow (src/idl/limit_order.json). Orders rest in a program-owned reserve
+  // and a keeper fills them through the same router as /trade. One deployment, not overridable —
+  // the IDL's own `address` is checked against this at load.
+  limitOrder: "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
 } as const;
 
 /**

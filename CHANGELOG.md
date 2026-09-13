@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Limit and stop orders** on the Cookiebox limit-order escrow (`get_limit_orders`,
+  `place_limit_order`, `cancel_limit_order`). The input rests in a program-owned reserve and a keeper
+  fills it through the same router `trade` uses, so any routable pair can rest as an order.
+  - `limit` (take-profit) fills at the price or better; `stop` is stop-market — `price` is the trigger
+    and the keeper sells at market once the rate falls to it, passing the proceeds through.
+  - The Cookiebox aggregator builds the transaction; this server **decodes and verifies it against the
+    request before signing** (maker, amounts, kind, expiry, pinned accounts, order PDA, allowed programs)
+    and refuses any mismatch. Orders that would fill or trigger at once, or pairs with no route, are
+    refused unless `skipMarketCheck` is set.
+  - Fee: the program's maker fee (10 bps at launch, read live) off each fill; nothing else. Default
+    expiry one week (`expiresInSeconds`, `0` = never). Native COOK is wrapped in the placement and
+    refunded as COOK on cancel.
 - **MomoSwap launchpad support**. Tokens launch on a COOK bonding curve and graduate to the open market
   once the raise target is met.
   - `get_launchpad_pools` / `get_launchpad_token` — browse launches and inspect one: curve price, raise
@@ -28,7 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     this server simulates it on your RPC, signs with `COOKIE_PRIVATE_KEY` and sends. Custody is unchanged:
     the key never leaves your machine.
 - **Cookiebox Swap API support, alongside Candy Shop — the agent picks the aggregator.** `get_quote`
-  and `trade` take an optional `aggregator` parameter: **`cookiebox`** ) or **`cookiescan`**. Quote
+  and `trade` take an optional `aggregator` parameter: **`cookiebox`** or **`cookiescan`**. Quote
   both to compare fills. Custody is unchanged on both paths: the aggregator builds an unsigned
   transaction, this server simulates it on your RPC, signs locally, and confirms.
   - Both results now report which `aggregator` ran, and a price impact the aggregator could not

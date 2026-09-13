@@ -1,0 +1,924 @@
+{
+  "address": "L1M1tkE57jpgimzjs5S8HVsmwk4uwrWoDFuUvXpVniH",
+  "metadata": {
+    "name": "limit_order",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Non-custodial limit orders on Cookie Chain, filled by flash-fill sandwich"
+  },
+  "instructions": [
+    {
+      "name": "cancel_expired_order",
+      "discriminator": [216, 120, 64, 235, 155, 19, 229, 99],
+      "accounts": [
+        {
+          "name": "keeper",
+          "docs": [
+            "Anyone. Garbage collection is permissionless so the keeper can reap expired orders;",
+            "the funds and the rent still go to the maker, so there is nothing to gain by it",
+            "beyond paying the transaction fee."
+          ],
+          "signer": true
+        },
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 100, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "order.base",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker",
+          "writable": true,
+          "relations": ["order"]
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          },
+          "relations": ["order"]
+        },
+        {
+          "name": "maker_input_account",
+          "writable": true
+        },
+        {
+          "name": "input_mint",
+          "relations": ["order"]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_order",
+      "discriminator": [95, 129, 237, 240, 8, 49, 223, 132],
+      "accounts": [
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 100, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "order.base",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker",
+          "writable": true,
+          "signer": true,
+          "relations": ["order"]
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          },
+          "relations": ["order"]
+        },
+        {
+          "name": "maker_input_account",
+          "docs": [
+            "Checked against the account pinned at placement, not merely against the mint — a",
+            "cancel cannot be redirected any more than a fill can. Either a token account for",
+            "`input_mint`, or the maker's wallet for a native-refund order (see `initialize_order`)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "input_mint",
+          "relations": ["order"]
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "flash_fill_order",
+      "discriminator": [252, 104, 18, 134, 164, 78, 18, 140],
+      "accounts": [
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 100, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "order.base",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          },
+          "relations": ["order"]
+        },
+        {
+          "name": "maker",
+          "writable": true,
+          "relations": ["order"]
+        },
+        {
+          "name": "maker_input_account",
+          "docs": [
+            "GUARD 6 — anti-griefing. Anyone can donate input tokens straight into the reserve, and a",
+            "token account cannot be closed while it holds a balance, so without a sweep a one-unit",
+            "donation would make the final fill of an order revert forever. Whatever the reserve still",
+            "holds after the fill is returned to the account pinned at placement."
+          ],
+          "writable": true
+        },
+        {
+          "name": "taker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "maker_output_account",
+          "docs": [
+            "GUARD 4 — pinned at placement. The maker's price is paid *here*, never to an account",
+            "the taker chooses. Either a token account for `output_mint` (the token program rejects a",
+            "mint mismatch on transfer) or, for a native-output order, the maker's wallet itself."
+          ],
+          "writable": true
+        },
+        {
+          "name": "payout",
+          "docs": [
+            "Scratch account for a native payout: created, filled with the maker's wCOOK, closed for",
+            "its lamports and released again, all inside this instruction. Unused (and untouched) for",
+            "a token-account payout, but always passed so there is one instruction, one account list."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [112, 97, 121, 111, 117, 116]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "taker_input_account",
+          "docs": [
+            "The taker pays the maker out of this account — the proceeds of whatever swap it did."
+          ],
+          "writable": true
+        },
+        {
+          "name": "fee",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_fee_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee"
+              },
+              {
+                "kind": "account",
+                "path": "output_mint_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "output_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "output_mint",
+          "relations": ["order"]
+        },
+        {
+          "name": "output_mint_token_program"
+        },
+        {
+          "name": "input_mint",
+          "docs": ["Needed only to sweep and close the reserve once the order is fully filled."]
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_taking_amount",
+          "type": "u64"
+        },
+        {
+          "name": "pay_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "init_fee",
+      "discriminator": [13, 9, 211, 107, 62, 172, 224, 67],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "maker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "maker_stable_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_stable_fee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_order",
+      "discriminator": [133, 110, 74, 175, 112, 159, 245, 159],
+      "accounts": [
+        {
+          "name": "base",
+          "docs": [
+            "A throwaway keypair supplied by the client. It seeds the order PDA, so a maker can",
+            "have unlimited concurrent orders with no nonce counter to race on."
+          ],
+          "signer": true
+        },
+        {
+          "name": "maker",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 100, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "base"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "docs": ["The escrow vault, owned by the order PDA."],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "maker_input_account",
+          "docs": [
+            "The account the escrow is funded FROM. It is also pinned as the refund destination —",
+            "unless `refund_native` is set (native input only), in which case the maker's wallet is",
+            "pinned instead and a cancel/expiry closes the reserve straight into it as lamports. A",
+            "maker who paid COOK then gets COOK back, with no wCOOK left to unwrap by hand."
+          ],
+          "writable": true
+        },
+        {
+          "name": "maker_output_account",
+          "docs": [
+            "Pinned onto the order — every fill pays here and nowhere else. Either a token account",
+            "for `output_mint` (its owner is *not* constrained to the maker: a maker may want the",
+            "output delivered to another account they control), or — only when `output_mint` is the",
+            "native mint — the maker's own wallet, in which case a fill pays lamports, not wCOOK.",
+            "Validated in `assert_output_destination`."
+          ]
+        },
+        {
+          "name": "input_mint"
+        },
+        {
+          "name": "output_mint"
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "output_mint_token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "making_amount",
+          "type": "u64"
+        },
+        {
+          "name": "taking_amount",
+          "type": "u64"
+        },
+        {
+          "name": "expired_at",
+          "type": {
+            "option": "i64"
+          }
+        },
+        {
+          "name": "kind",
+          "type": "u8"
+        },
+        {
+          "name": "refund_native",
+          "type": "bool"
+        },
+        {
+          "name": "trigger_taking_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pre_flash_fill_order",
+      "discriminator": [240, 47, 153, 68, 13, 190, 225, 42],
+      "accounts": [
+        {
+          "name": "order",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [111, 114, 100, 101, 114]
+              },
+              {
+                "kind": "account",
+                "path": "order.base",
+                "account": "Order"
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [114, 101, 115, 101, 114, 118, 101]
+              },
+              {
+                "kind": "account",
+                "path": "order"
+              }
+            ]
+          },
+          "relations": ["order"]
+        },
+        {
+          "name": "taker",
+          "signer": true
+        },
+        {
+          "name": "taker_output_account",
+          "docs": [
+            "The taker receives the order's *input* token here — the leg it will swap. Passing the",
+            "reserve itself would be a self-transfer no-op that still flips `waiting`; refuse it."
+          ],
+          "writable": true
+        },
+        {
+          "name": "input_mint",
+          "relations": ["order"]
+        },
+        {
+          "name": "input_mint_token_program"
+        },
+        {
+          "name": "instructions",
+          "docs": ["`flash_fill_order` appears later in this same transaction."],
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "making_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_fee",
+      "discriminator": [232, 253, 195, 247, 148, 212, 73, 222],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "maker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "maker_stable_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_fee",
+          "type": "u64"
+        },
+        {
+          "name": "taker_stable_fee",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_fee",
+      "discriminator": [14, 122, 231, 218, 31, 238, 223, 150],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "address": "HGSGbiM3tMvbX8cxitEgzbQv53M4rFcsE1gn7fvrHrkN"
+        },
+        {
+          "name": "fee",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [102, 101, 101]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_fee_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140, 151, 37, 143, 78, 36, 137, 241, 187, 61, 16, 41, 20, 142, 13, 131, 11, 90, 19,
+                153, 218, 255, 16, 132, 4, 142, 123, 216, 219, 233, 248, 89
+              ]
+            }
+          }
+        },
+        {
+          "name": "admin_token_account",
+          "writable": true
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Fee",
+      "discriminator": [24, 55, 150, 250, 168, 27, 101, 178]
+    },
+    {
+      "name": "Order",
+      "discriminator": [134, 173, 223, 185, 77, 86, 28, 51]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6001,
+      "name": "SameMint",
+      "msg": "Input and output mint must differ"
+    },
+    {
+      "code": 6002,
+      "name": "ExpiryInThePast",
+      "msg": "Expiry is already in the past"
+    },
+    {
+      "code": 6003,
+      "name": "OrderExpired",
+      "msg": "Order has expired"
+    },
+    {
+      "code": 6004,
+      "name": "OrderNotExpired",
+      "msg": "Order has not expired yet"
+    },
+    {
+      "code": 6005,
+      "name": "FillInProgress",
+      "msg": "Order has a fill in progress"
+    },
+    {
+      "code": 6006,
+      "name": "NoFillInProgress",
+      "msg": "Order has no fill in progress"
+    },
+    {
+      "code": 6007,
+      "name": "AmountExceedsRemaining",
+      "msg": "Requested amount exceeds the amount remaining on the order"
+    },
+    {
+      "code": 6008,
+      "name": "AccountNotPinned",
+      "msg": "Token account does not match the account pinned on the order"
+    },
+    {
+      "code": 6009,
+      "name": "UnsupportedMintExtension",
+      "msg": "Mint carries a transfer fee or transfer hook extension and is not supported"
+    },
+    {
+      "code": 6010,
+      "name": "FeeTooHigh",
+      "msg": "Fee exceeds the maximum permitted"
+    },
+    {
+      "code": 6011,
+      "name": "Unauthorized",
+      "msg": "Only the admin may perform this action"
+    },
+    {
+      "code": 6012,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6013,
+      "name": "CpiNotAllowed",
+      "msg": "pre_flash_fill_order must be a top-level instruction, not a CPI"
+    },
+    {
+      "code": 6014,
+      "name": "MissingFlashFill",
+      "msg": "No matching flash_fill_order found later in this transaction"
+    },
+    {
+      "code": 6015,
+      "name": "ExceedsMaxTakingAmount",
+      "msg": "Required output plus fee exceeds max_taking_amount"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidOutputAccount",
+      "msg": "maker_output_account must be a token account for output_mint, or the maker's own wallet when output_mint is the native mint"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidRefundAccount",
+      "msg": "refund_native is only allowed when input_mint is the native mint"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidTrigger",
+      "msg": "a stop order's trigger must be at or above its floor (taking_amount); a limit order has no trigger"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidOrderKind",
+      "msg": "Unknown order kind"
+    },
+    {
+      "code": 6020,
+      "name": "UnauthorizedTaker",
+      "msg": "Stop orders may only be filled by the authorised keeper"
+    }
+  ],
+  "types": [
+    {
+      "name": "Fee",
+      "docs": [
+        "Global fee configuration — a singleton at `[\"fee\"]` that is *also* the token authority",
+        "over every `program_fee_account`.",
+        "",
+        "The fee deliberately does not live on the `Order`: keeping it here means it is",
+        "retunable by the admin with no program upgrade and no account migration."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "maker_fee",
+            "docs": [
+              "Deducted from what the maker receives on a fill (Jupiter's platform fee): the maker is",
+              "paid `required_out - maker_fee`, the vault gets the difference. This is the fee that is",
+              "real revenue whoever fills — a taker fee paid by our own keeper is pocket to pocket."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "maker_stable_fee",
+            "type": "u64"
+          },
+          {
+            "name": "taker_fee",
+            "docs": ["Charged to the taker on top of the maker's limit price."],
+            "type": "u64"
+          },
+          {
+            "name": "taker_stable_fee",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Order",
+      "docs": [
+        "A resting limit order. Field names match Jupiter Limit Order v2 so its published IDL",
+        "stays a usable reference.",
+        "",
+        "\"Making\" is the maker's side: the input token it escrows. \"Taking\" is what the maker",
+        "requires back. A fill is `pre_flash_fill_order` (release input to the taker) followed,",
+        "in the same transaction, by `flash_fill_order` (pull the required output back out of",
+        "the taker)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "maker",
+            "type": "pubkey"
+          },
+          {
+            "name": "input_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "output_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "waiting",
+            "docs": [
+              "A fill is mid-flight: input has been released but not yet settled. The reentrancy",
+              "guard — two releases against one settlement would double-spend the reserve."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "ori_making_amount",
+            "type": "u64"
+          },
+          {
+            "name": "ori_taking_amount",
+            "type": "u64"
+          },
+          {
+            "name": "making_amount",
+            "docs": ["Input still escrowed in the reserve."],
+            "type": "u64"
+          },
+          {
+            "name": "taking_amount",
+            "docs": ["Output still required for the remaining `making_amount`."],
+            "type": "u64"
+          },
+          {
+            "name": "maker_input_account",
+            "docs": ["PINNED at placement — a cancel refunds only here."],
+            "type": "pubkey"
+          },
+          {
+            "name": "maker_output_account",
+            "docs": ["PINNED at placement — a fill pays only here."],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve",
+            "type": "pubkey"
+          },
+          {
+            "name": "borrow_making_amount",
+            "docs": ["Set by `pre_flash_fill_order`, consumed by `flash_fill_order`."],
+            "type": "u64"
+          },
+          {
+            "name": "expired_at",
+            "docs": ["`None` = good-til-cancelled."],
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "base",
+            "docs": [
+              "The PDA seed. A throwaway keypair the client generates and signs with, rather than a",
+              "nonce counter — no read-then-write race when two placements are in flight."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referral",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "`ORDER_KIND_LIMIT` or `ORDER_KIND_STOP`. A stop is a below-market trigger: the program",
+              "still guarantees the maker at least `taking_amount` (the FLOOR), but only `STOP_KEEPER`",
+              "may fill it, and that keeper waits for the market to fall to `trigger_taking_amount`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix time the order was placed, for ordering in clients. Informational only."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "trigger_taking_amount",
+            "docs": [
+              "STOP only: the output (for `ori_making_amount`) at which the stop ARMS — stop-market",
+              "semantics. Once the market pays this or less, the keeper sells at whatever the market",
+              "gives, down to the floor `taking_amount`. Placed as `>= ori_taking_amount`. Informational",
+              "to the program (only the keeper reads it); the floor is what the program enforces.",
+              "0 for a plain limit order."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -16,6 +16,14 @@ import { getBalances, getSolanaBalances } from "../core/balances";
 import { ownPublicKey, walletInfo } from "../core/wallet";
 import { trade } from "../core/trade";
 import { transfer } from "../core/transfer";
+import {
+  cancelLimitOrder,
+  getLimitOrders,
+  placeLimitOrder,
+  DEFAULT_EXPIRY_SECONDS,
+  MAX_EXPIRY_SECONDS,
+  type LimitOrderKind,
+} from "../core/limitOrders";
 import { getStakeInfo, stake, unstake } from "../core/stake";
 import {
   createPool,
@@ -355,6 +363,139 @@ registerTool(
       unwrapSol?: boolean;
     }) => trade(a),
   ),
+);
+
+registerTool(
+  "get_limit_orders",
+  {
+    title: "Open limit orders",
+    description:
+      "Open limit / stop orders resting in the Cookiebox limit-order escrow for a wallet (yours by " +
+      "default, or `owner` = any address or .cook name). Read straight from the chain via the " +
+      "Cookiebox aggregator — no key needed. Each order shows the remaining input, the gross output " +
+      "the program enforces (`minReceive`), what the wallet actually receives after the maker fee " +
+      "(`netAfterFee`), the price (a stop's TRIGGER), fill progress, expiry and status " +
+      "(`open` / `filling` / `expired` — an expired order still holds its input until it is " +
+      "cancelled). `fees` is the live on-chain schedule in bps (null when unavailable).",
+    inputSchema: {
+      owner: z
+        .string()
+        .min(3)
+        .max(64)
+        .optional()
+        .describe("wallet address or .cook name; defaults to the configured wallet"),
+    },
+  },
+  tool(async (a: { owner?: string }) => getLimitOrders(a)),
+);
+
+registerTool(
+  "place_limit_order",
+  {
+    title: "Place a limit or stop order",
+    description:
+      "Rest an order in the Cookiebox limit-order escrow: the input is locked in a program-owned " +
+      "reserve and a keeper fills it through the same router `trade` uses once the executable rate " +
+      "reaches the price, paying the pinned output account (partial fills possible). Requires " +
+      "COOKIE_PRIVATE_KEY. `kind: 'limit'` (default, take-profit) fills at the price OR BETTER; the " +
+      "price must sit ABOVE the current rate. `kind: 'stop'` is a stop-loss, stop-MARKET: `price` is " +
+      "the TRIGGER, which must sit BELOW the current rate; once the rate falls to it the keeper " +
+      "sells at market and passes the proceeds through — a hidden on-chain floor 50% below the " +
+      "trigger (override with `floorPrice`) only caps what a rogue keeper could pay. Fee: the " +
+      "maker receives the price minus the on-chain maker fee (10 bps at launch, read live); no " +
+      "placement fee. Before signing, the built transaction is decoded and checked against the " +
+      "request (maker, amounts, kind, pinned accounts, programs) and simulated. Refuses an order " +
+      "that would fill or trigger immediately (use `trade` for that) unless `skipMarketCheck` is " +
+      "set. Native COOK input is wrapped inside the same transaction; cancel / expiry refunds it as " +
+      "COOK. Returns the `order` address for get_limit_orders / cancel_limit_order.",
+    inputSchema: {
+      inputMint: z.string().min(32).max(44).describe("token to sell (COOK/native mint for COOK)"),
+      outputMint: z.string().min(32).max(44).describe("token to receive"),
+      amount: z
+        .union([z.number().positive(), z.string()])
+        .describe("UI amount of the input token to sell, e.g. 10 for 10 COOK"),
+      price: z
+        .union([z.string(), z.number().positive()])
+        .describe(
+          'output per input in human units, the limit for a take-profit or the trigger for a stop. Pass a decimal STRING (e.g. "0.000012") for tiny prices — a number that would print in exponent form is refused',
+        ),
+      kind: z
+        .enum(["limit", "stop"])
+        .optional()
+        .describe(
+          "limit (default: take-profit, fills at price or better) or stop (stop-market sell once the rate falls to price)",
+        ),
+      expiresInSeconds: z
+        .number()
+        .int()
+        .min(0)
+        .max(MAX_EXPIRY_SECONDS)
+        .optional()
+        .describe(
+          `lifetime in seconds (default ${DEFAULT_EXPIRY_SECONDS} = 1 week, max one year); 0 = good-til-cancelled. An expired order is NOT auto-refunded until cancelled or reaped`,
+        ),
+      floorPrice: z
+        .union([z.string(), z.number().positive()])
+        .optional()
+        .describe(
+          "stop only: override the on-chain safety floor (default 50% below the trigger). Must be at or below the trigger. Not what you receive — a cap on a compromised keeper",
+        ),
+      wrapSol: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true. When the input is COOK: wrap the lamport shortfall into wCOOK in the same tx and refund native COOK on cancel/expiry. false = pay from an existing wCOOK balance and be refunded wCOOK",
+        ),
+      unwrapSol: z
+        .boolean()
+        .optional()
+        .describe(
+          "default true. When the output is COOK: a fill pays native COOK to the wallet. false = receive wCOOK in the token account",
+        ),
+      skipMarketCheck: z
+        .boolean()
+        .optional()
+        .describe(
+          "default false. Place even if the order would fill/trigger at once against the current rate, or no route exists yet",
+        ),
+    },
+  },
+  tool(
+    async (a: {
+      inputMint: string;
+      outputMint: string;
+      amount: string | number;
+      price: string | number;
+      kind?: LimitOrderKind;
+      expiresInSeconds?: number;
+      floorPrice?: string | number;
+      wrapSol?: boolean;
+      unwrapSol?: boolean;
+      skipMarketCheck?: boolean;
+    }) => placeLimitOrder(a),
+  ),
+);
+
+registerTool(
+  "cancel_limit_order",
+  {
+    title: "Cancel a limit order",
+    description:
+      "Cancel one of your open limit / stop orders and get the remaining input back. Requires " +
+      "COOKIE_PRIVATE_KEY; only the maker can cancel. The refund lands in the order's pinned input " +
+      "account (recreated first if it was closed); a native-COOK order is refunded as COOK, a " +
+      "wCOOK-funded one is unwrapped in the same tx unless `unwrapSol: false`. Also how an EXPIRED " +
+      "order's input is recovered. The built transaction is decoded and checked (your order, refund " +
+      "to you, known programs only) and simulated before signing.",
+    inputSchema: {
+      order: z.string().min(32).max(44).describe("the `order` address from get_limit_orders"),
+      unwrapSol: z
+        .boolean()
+        .optional()
+        .describe("default true. false = leave a wCOOK refund wrapped in the token account"),
+    },
+  },
+  tool(async (a: { order: string; unwrapSol?: boolean }) => cancelLimitOrder(a)),
 );
 
 registerTool(

@@ -40,6 +40,9 @@ design. It is a community project for the whole Cookie Chain ecosystem.
   parameter and can quote both to compare. `chain: "solana"` buys/sells the bridged COOK on **Solana
   mainnet** via [Jupiter](https://jup.ag) instead.
 - **Transfer** COOK or any SPL / Token-2022 token.
+- **Rest limit and stop orders** in the Cookiebox limit-order escrow — take-profit at a price or
+  better, or a stop-loss that sells at market once the rate falls to a trigger — filled by a keeper
+  across every routable Cookie Chain market.
 - **Launch tokens** on the [MomoSwap launchpad](https://momoswap.fun) — create a token on a COOK
   bonding curve, buy / sell the curve, claim after graduation, and sweep your creator fees.
 - **Manage liquidity** — create pools, add / remove liquidity, claim fees, and permanently lock
@@ -184,6 +187,33 @@ APY / fees), launchpad reads `get_launchpad_pools` / `get_launchpad_token` /
 
 **Money** (need `COOKIE_PRIVATE_KEY`): `trade` (swap via Cookiebox or Cookiescan), `transfer` (COOK or any token),
 `stake` / `unstake` (COOK ⇄ bCOOK liquid staking).
+
+**Limit orders** ([Cookiebox](https://cookiebox.app/trade) limit-order escrow, program `L1M1tk…`):
+`get_limit_orders` lists a wallet's resting orders with no key (yours, or any address / `.cook` name);
+`place_limit_order` and `cancel_limit_order` need `COOKIE_PRIVATE_KEY`. An order locks the input in a
+program-owned reserve; a keeper fills it through the same router `trade` uses, so any pair with a route
+can rest as an order, and pays the pinned output account (partial fills possible). Two kinds:
+
+- **`limit`** (default) is a take-profit: fills at the price **or better**. The price must sit above
+  the current rate.
+- **`stop`** is a stop-loss, **stop-market**: `price` is the trigger, which must sit below the current
+  rate; once the executable rate falls to it the keeper sells at market and passes the proceeds
+  through. A hidden on-chain floor (50% below the trigger, `floorPrice` to override) only caps what a
+  compromised keeper key could pay — it is not what you receive.
+
+The only fee is the program's **maker fee, 10 bps at launch**, deducted from each fill and read live
+from chain (`fees` in `get_limit_orders`). Orders default to a one-week expiry (`expiresInSeconds`,
+`0` = good-til-cancelled, max one year); an **expired order still holds its input until it is
+cancelled**. Native COOK is wrapped inside the placement and refunded as COOK on cancel.
+
+> ⚠️ **The aggregator builds the transaction; this server verifies it before signing.** Every
+> instruction is decoded against the program IDL and checked — fee payer, maker, amounts, kind,
+> expiry, the pinned refund / payout accounts, the order PDA, and that only the five expected
+> programs are touched (escrow, compute budget, system, token, associated-token). A build that
+> disagrees with the request is refused with nothing signed. `place_limit_order` also refuses an
+> order that would fill or trigger immediately against the router's current rate (use `trade`), and a
+> pair with no route at all, unless `skipMarketCheck: true`. Prices go to the API as decimal
+> **strings**; a number that would print in exponent form is refused rather than rounded.
 
 **Launchpad** (need `COOKIE_PRIVATE_KEY`, [MomoSwap](https://momoswap.fun)): `deploy_token` launches a
 token on a COOK bonding curve (a logo is **required** — pass `imageBase64` and it is pinned to IPFS, or

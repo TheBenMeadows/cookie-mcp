@@ -41,13 +41,13 @@ import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 import { noRouteError } from "./launchpad";
 
-interface TokenMeta {
+export interface TokenMeta {
   dec: number;
   sym: string | null;
   priceCook: number | null;
 }
 
-async function resolveMeta(
+export async function resolveMeta(
   inputMint: string,
   outputMint: string,
 ): Promise<{ input: TokenMeta; output: TokenMeta }> {
