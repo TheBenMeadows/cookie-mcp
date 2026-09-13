@@ -2,6 +2,16 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+# Unreleased
+
+### Fixed
+
+- **`get_quote`, `trade` and the limit-order tools no longer assume 9 decimals for a mint the
+  Cookiescan registry does not carry decimals for.** Decimals are now read from the SPL mint account
+  on-chain when the registry lacks them, and a mint neither source knows is refused with a clear error
+  instead of being quoted 1000× off (COOK and most launchpad tokens have 6 decimals). Listed tokens
+  are unaffected: the registry remains the fast path and no extra RPC call is made for them.
+
 # [0.4.0](https://github.com/cookiechain/cookie-mcp/releases/tag/v0.4.0)
 
 _September 13, 2026_

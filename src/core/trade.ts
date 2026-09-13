@@ -4,9 +4,6 @@
 import { VersionedTransaction, Transaction, type Keypair } from "@solana/web3.js";
 
 import {
-  COOK_MINT,
-  COOK_DECIMALS,
-  COOK_SYMBOL,
   DEFAULT_SLIPPAGE_BPS,
   DEFAULT_SWAP_AGGREGATOR,
   DEFAULT_SOLANA_RPC_URL,
@@ -17,7 +14,7 @@ import {
   type TradeChain,
 } from "./config";
 import { CookieMcpError } from "./errors";
-import { fetchTokens } from "./cookiescan";
+import { resolveMintMeta, requireMintMeta, type MintMeta } from "./mintMeta";
 import {
   quoteMultiRoute,
   buildSwapTx,
@@ -41,28 +38,15 @@ import { requireWallet } from "./wallet";
 import { rawToUi, uiToRaw } from "./format";
 import { noRouteError } from "./launchpad";
 
-export interface TokenMeta {
-  dec: number;
-  sym: string | null;
-  priceCook: number | null;
-}
+export type TokenMeta = MintMeta;
 
+/** Decimals/symbol/COOK price for both ends of a swap; refuses a mint nobody knows (see mintMeta). */
 export async function resolveMeta(
   inputMint: string,
   outputMint: string,
 ): Promise<{ input: TokenMeta; output: TokenMeta }> {
-  const meta = (mint: string, registry: Awaited<ReturnType<typeof fetchTokens>>): TokenMeta => {
-    if (mint === COOK_MINT) return { dec: COOK_DECIMALS, sym: COOK_SYMBOL, priceCook: 1 };
-    const t = registry.find((x) => x.mint === mint);
-    return {
-      dec: t?.metadata?.decimals ?? 9,
-      sym: t?.metadata?.symbol ?? null,
-      priceCook: t?.price?.native ?? null,
-    };
-  };
-  const needRegistry = inputMint !== COOK_MINT || outputMint !== COOK_MINT;
-  const registry = needRegistry ? await fetchTokens() : [];
-  return { input: meta(inputMint, registry), output: meta(outputMint, registry) };
+  const meta = await resolveMintMeta([inputMint, outputMint]);
+  return { input: requireMintMeta(meta, inputMint), output: requireMintMeta(meta, outputMint) };
 }
 
 function deserializeTx(base64: string): VersionedTransaction | Transaction {

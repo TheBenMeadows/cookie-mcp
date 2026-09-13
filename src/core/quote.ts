@@ -2,16 +2,13 @@
 // fee, min out after slippage, price impact, and the route. Two aggregators: Cookiebox and Candy Shop / Cookiescan.
 // No key needed. `amount` is a UI amount of the input token.
 import {
-  COOK_MINT,
-  COOK_DECIMALS,
-  COOK_SYMBOL,
   DEFAULT_SLIPPAGE_BPS,
   DEFAULT_SWAP_AGGREGATOR,
   type SwapAggregator,
   type TradeChain,
 } from "./config";
 import { CookieMcpError } from "./errors";
-import { fetchTokens } from "./cookiescan";
+import { resolveMintMeta, requireMintMeta } from "./mintMeta";
 import { quoteMultiRoute, type CandyShopMultiRoute } from "./candyshop";
 import { quoteAgg } from "./cookiebox";
 import {
@@ -98,22 +95,6 @@ export function formatQuote(
   };
 }
 
-async function resolveDecimals(
-  mints: string[],
-): Promise<Map<string, { dec: number; sym: string | null }>> {
-  const out = new Map<string, { dec: number; sym: string | null }>();
-  const need = mints.filter((m) => m !== COOK_MINT);
-  out.set(COOK_MINT, { dec: COOK_DECIMALS, sym: COOK_SYMBOL });
-  if (need.length) {
-    const registry = await fetchTokens();
-    for (const m of need) {
-      const t = registry.find((x) => x.mint === m);
-      out.set(m, { dec: t?.metadata?.decimals ?? 9, sym: t?.metadata?.symbol ?? null });
-    }
-  }
-  return out;
-}
-
 export async function getQuote(args: {
   inputMint: string;
   outputMint: string;
@@ -129,9 +110,9 @@ export async function getQuote(args: {
   }
   if (chain === "solana") return quoteSolana(args, slippageBps);
   const aggregator = args.aggregator ?? DEFAULT_SWAP_AGGREGATOR;
-  const dec = await resolveDecimals([args.inputMint, args.outputMint]);
-  const inMeta = dec.get(args.inputMint)!;
-  const outMeta = dec.get(args.outputMint)!;
+  const dec = await resolveMintMeta([args.inputMint, args.outputMint]);
+  const inMeta = requireMintMeta(dec, args.inputMint);
+  const outMeta = requireMintMeta(dec, args.outputMint);
 
   let amountRaw: bigint;
   try {
