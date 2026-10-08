@@ -46,6 +46,25 @@ describe("isPrivateAddress", () => {
     }
   });
 
+  it("judges every IPv6 form that embeds an IPv4 address by that address", () => {
+    for (const ip of [
+      "::ffff:7f00:1", // mapped loopback, as new URL() writes it
+      "::ffff:ac10:1", // mapped 172.16.0.1
+      "0:0:0:0:0:ffff:a9fe:a9fe", // mapped 169.254.169.254, uncompressed
+      "::7f00:1", // IPv4-compatible loopback
+      "::127.0.0.1",
+      "64:ff9b::a00:5", // NAT64 to 10.0.0.5
+      "64:ff9b:1::1", // local-use NAT64 prefix
+      "2002:7f00:1::", // 6to4 around loopback
+      "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo
+      "fec0::1", // site-local
+    ]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    expect(isPrivateAddress("::ffff:5db8:d822")).toBe(false); // mapped 93.184.216.34
+    expect(isPrivateAddress("64:ff9b::5db8:d822")).toBe(false); // NAT64 to the same
+  });
+
   it("allows ordinary public addresses", () => {
     expect(isPrivateAddress("93.184.216.34")).toBe(false);
     expect(isPrivateAddress("2606:2800:220:1::1")).toBe(false);
@@ -94,6 +113,20 @@ describe("fetchRemoteImage", () => {
     await expect(fetchRemoteImage("https://169.254.169.254/latest/meta-data")).rejects.toThrow(
       /private network/,
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an IPv4-mapped literal however the URL spells it", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const raw of [
+      "https://[::ffff:127.0.0.1]/logo.png",
+      "https://[::ffff:7f00:1]/logo.png",
+      "https://[::ffff:ac10:1]/logo.png",
+    ]) {
+      await expect(fetchRemoteImage(raw), raw).rejects.toThrow(/private network/);
+    }
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

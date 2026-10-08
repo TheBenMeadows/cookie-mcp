@@ -33,18 +33,52 @@ function ipv4IsPrivate(ip: string): boolean {
   return false;
 }
 
-/** Is this address one we refuse to fetch from? (pure) */
+/** An IPv6 address as its 16 bytes. Expects input `net.isIPv6` accepted. */
+function ipv6Bytes(v: string): number[] {
+  let s = v.replace(/%.*$/, ""); // zone id
+  // A trailing dotted quad (::ffff:1.2.3.4) is the last two groups written as IPv4.
+  const quad = s.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (quad) {
+    const [a, b, c, d] = quad.slice(1).map(Number);
+    s = s.slice(0, quad.index) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = s.split("::");
+  const groups = (part: string | undefined) => (part ? part.split(":") : []);
+  const h = groups(head);
+  const t = groups(tail);
+  const all = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill("0"), ...t];
+  return all.flatMap((g) => {
+    const n = parseInt(g, 16);
+    return [n >> 8, n & 0xff];
+  });
+}
+
+const v4At = (b: number[], i: number) => b.slice(i, i + 4).join(".");
+const allZero = (b: number[], from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+
+/**
+ * Is this address one we refuse to fetch from? (pure)
+ *
+ * IPv6 is checked on its bytes, not its text. `new URL` rewrites `[::ffff:127.0.0.1]` to
+ * `[::ffff:7f00:1]`, so a pattern on the dotted form never sees the address that is actually
+ * fetched — and every form that carries an IPv4 address inside it has to be judged by that IPv4.
+ */
 export function isPrivateAddress(ip: string): boolean {
   const v = ip.toLowerCase().replace(/^\[|\]$/g, "");
   if (net.isIPv4(v)) return ipv4IsPrivate(v);
   if (!net.isIPv6(v)) return true; // unparseable → refuse
-  // IPv4-mapped (::ffff:127.0.0.1) is the classic bypass.
-  const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return ipv4IsPrivate(mapped[1]);
-  if (v === "::" || v === "::1") return true; // unspecified, loopback
-  if (/^f[cd]/.test(v)) return true; // unique-local fc00::/7
-  if (/^fe[89ab]/.test(v)) return true; // link-local fe80::/10
-  if (/^ff/.test(v)) return true; // multicast
+  const b = ipv6Bytes(v);
+  if (allZero(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) return ipv4IsPrivate(v4At(b, 12)); // ::ffff:0:0/96 mapped
+  if (allZero(b, 0, 12)) return true; // ::/96 — unspecified, loopback, deprecated IPv4-compatible
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) {
+    // 64:ff9b::/96 is NAT64 to the embedded IPv4; 64:ff9b:1::/48 is a local NAT64 prefix.
+    return allZero(b, 4, 12) ? ipv4IsPrivate(v4At(b, 12)) : true;
+  }
+  if (b[0] === 0x20 && b[1] === 0x02) return ipv4IsPrivate(v4At(b, 2)); // 2002::/16 6to4
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return true; // 2001::/32 Teredo
+  if ((b[0] & 0xfe) === 0xfc) return true; // unique-local fc00::/7
+  if (b[0] === 0xfe && b[1] >= 0x80) return true; // link-local fe80::/10, site-local fec0::/10
+  if (b[0] === 0xff) return true; // multicast
   return false;
 }
 
